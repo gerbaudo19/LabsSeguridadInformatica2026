@@ -55,15 +55,14 @@ fuente.** Si no encontrás una fuente que lo respalde, no lo escribas.*
 
 ## A.2 — Activo afectado
 
-*¿Qué se estaba protegiendo? Concreto: no «los datos», sino qué datos, de
-quién, en qué sistema. Si hubo más de un activo, priorizá y justificá el
-orden.*
+**Activo principal:** Disponibilidad de la capacidad de cómputo y de la red ARPANET — ciclos de CPU, memoria y servicio de red de hosts Unix BSD 4.3 (VAX, Sun 3) pertenecientes a universidades y centros de investigación (MIT, Berkeley, Purdue, Stanford, NASA, entre otros), aproximadamente 6.000 hosts comprometidos (cerca del 10% de Internet en 1988).
 
-**Activo principal:**
+**Por qué es el principal:** El Morris Worm no buscó borrar ni exfiltrar una base de datos puntual; su defecto de reinfección descontrolada saturó procesos críticos (`sendmail` con modo DEBUG, `fingerd` con desbordamiento de buffer, `rsh`/`rhosts` con confianza) y forzó reinicios continuos. El impacto medible y masivo fue la pérdida de servicio — sistemas inoperables por agotamiento de recursos — del cual derivan los demás daños. La prioridad se justifica porque la caída operativa bloqueó cualquier uso de los otros activos.
 
-**Por qué es el principal:**
-
-**Otros activos afectados:**
+**Otros activos afectados (en orden de criticidad):**
+1. **Integridad de datos y procesos locales** — archivos temporales y estado de procesos alterados por la carga del gusano, sin destrucción masiva intencional pero con corrupción operativa.
+2. **Confidencialidad de credenciales y acceso** — explotación de contraseñas débiles y confianza `rsh`/`rhosts` para propagarse, exponiendo mecanismos de autenticación.
+3. **Confianza operativa en Internet naciente** — activo reputacional y sistémico: pérdida de confianza de la comunidad ARPANET/NSFNET que motivó la creación del CERT/CC como respuesta institucional.
 
 ---
 
