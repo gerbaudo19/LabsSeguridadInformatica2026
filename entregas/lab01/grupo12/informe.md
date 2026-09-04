@@ -80,13 +80,13 @@ concreto del incidente, no una generalidad.*
 
 | Propiedad | ¿Se violó? | Evidencia concreta |
 |---|---|---|
-| **Confidencialidad** | Sí / No / Parcial | |
-| **Integridad** | Sí / No / Parcial | |
-| **Disponibilidad** | Sí / No / Parcial | |
+| **Confidencialidad** | No | El gusano no accedió, robó, filtró ni leyó información o datos confidenciales de los usuarios ni de las instituciones. |
+| **Integridad** | No | Ningún archivo, base de datos o registro de los sistemas infectados fue modificado, corrompido o borrado por el código del gusano. |
+| **Disponibilidad** | Sí | La continua propagación y reinfección del gusano generó múltiples procesos que saturaron por completo la memoria y CPU de los servidores, provocando una caída masiva de los mismos (DoS). |
 
 **Justificación ampliada de la propiedad más discutible:**
 
-*De las tres, ¿cuál fue la más difícil de determinar y por qué? Desarrollá.*
+La integridad y la confidencialidad son frecuentemente malinterpretadas en este incidente. Dado que fue un evento grave de escala global, es muy común asumir que el atacante "vulneró todo". Sin embargo, Morris programó el gusano inicialmente solo para "medir el tamaño de internet", sin una carga útil maliciosa destructiva. Fue exclusivamente un error de diseño (la tasa de reinfección sin control de 1 en 7) lo que accidentalmente transformó un experimento de descubrimiento en un ataque de denegación de servicio, afectando por ende pura y exclusivamente a la disponibilidad.
 
 ---
 
