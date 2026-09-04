@@ -14,8 +14,8 @@
 
 | | |
 |---|---|
-| **Grupo** | |
-| **Caso asignado (Parte A)** | |
+| **Grupo** | 12 |
+| **Caso asignado (Parte A)** | Morris Worm (1988) - Justificación: 12 mod 6 = 0 |
 | **Tema del mini-research** | |
 | **Fecha de entrega** | |
 
@@ -43,9 +43,13 @@ fuente.** Si no encontrás una fuente que lo respalde, no lo escribas.*
 
 | Fecha | Hecho | Fuente |
 |---|---|---|
-| | | |
-| | | |
-| | | |
+| 2 de noviembre 1988 (aprox 20:30 EST) | Robert Tappan Morris libera el gusano desde MIT para ocultar origen. | FBI Records / Wikipedia |
+| 2 de noviembre 1988 (20:00 - 22:00 EST) | Admins en UC Berkeley notan carga inusual y reportan ataque de virus. | Lawrence Livermore National Laboratory (LLNL) |
+| 2 de noviembre 1988 (22:00 EST) | En LLNL observan un aumento de 1000x en carga y confirman el gusano. | LLNL |
+| 3 de noviembre 1988 | El gusano infecta miles de máquinas, aprox 10% de Internet (incl. NASA). | Cornell University |
+| 3 de noviembre 1988 | Por defecto de diseño, reinfecta sistemas agotando recursos de forma masiva. | PCMag / UNC |
+| Noviembre de 1988 | DARPA establece el CERT en respuesta al incidente para futura coordinación. | Limn - The Morris Worm |
+| 1990 | Autor es la primera persona condenada por Ley de Fraude Informático (1986). | FBI Records |
 
 ---
 
@@ -318,14 +322,13 @@ lee y suma. No es relleno: es donde se ve si entendieron el problema.*
 > que entiendan lo que entregan. La omisión de esta declaración es **causal de
 > rechazo automático** de la entrega. Una declaración honesta no baja la nota.
 
-**¿El grupo usó asistentes de IA en este trabajo?**  Sí / No
-
-*Si la respuesta es No, firmen igual la sección y pasen al final.*
-
-| Herramienta | Para qué se usó | Qué partes del entregable afectó | Cómo se verificó que lo devuelto era correcto |
-|---|---|---|---|
-| | | | |
-| | | | |
+**¿El grupo usó asistentes de IA en este trabajo?**  Sí
+ 
+ *Si la respuesta es No, firmen igual la sección y pasen al final.*
+ 
+ | Herramienta | Para qué se usó | Qué partes del entregable afectó | Cómo se verificó que lo devuelto era correcto |
+ |---|---|---|---|
+ | Gemini (Antigravity) | Búsqueda de fuentes históricas, redacción y armado de commits | Sección A.1 (Cronología) | Verificando manualmente que las fechas coincidieran con la historia oficial del FBI y LLNL. |
 
 **Declaración:**
 
