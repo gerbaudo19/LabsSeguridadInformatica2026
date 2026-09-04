@@ -91,24 +91,20 @@ La integridad y la confidencialidad son frecuentemente malinterpretadas en este 
 
 ## A.4 — Encadenamiento amenaza → vulnerabilidad → impacto
 
-*Redacción en prosa, no viñetas. Usá los términos con precisión: una amenaza
-no es una vulnerabilidad, un exploit no es una vulnerabilidad, y el impacto
-no es el ataque.*
-
 ```
 amenaza  →  explota  →  vulnerabilidad  →  sobre  →  activo  →  produce  →  impacto
 ```
 
 | Elemento | En este caso |
 |---|---|
-| **Amenaza** *(quién / qué, con qué motivación)* | |
-| **Vulnerabilidad** *(la debilidad concreta que se explotó)* | |
-| **Activo** *(sobre qué recayó)* | |
-| **Impacto** *(consecuencia sobre el negocio o las personas)* | |
+| **Amenaza** *(quién / qué, con qué motivación)* | Robert Tappan Morris (estudiante de posgrado, Cornell) mediante el gusano autorreplicante Morris Worm. Motivación inicial: curiosidad académica para medir el tamaño de Internet, sin carga destructiva intencional, pero ejecutando código no autorizado en sistemas ajenos. |
+| **Vulnerabilidad** *(la debilidad concreta que se explotó)* | Conjunto de debilidades concretas encadenadas: (1) desbordamiento de buffer en `fingerd` de BSD, (2) modo DEBUG de `sendmail` que permitía ejecución remota, (3) confianza transitiva `rsh`/`rhosts` + contraseñas débiles por diccionario, y (4) defecto de diseño del propio gusano que reinfectaba 1 de cada 7 veces aun en hosts ya infectados, impidiendo throttling. |
+| **Activo** *(sobre qué recayó)* | Disponibilidad de la capacidad de cómputo y red ARPANET — hosts VAX/Sun 3 Unix BSD 4.3 de universidades y centros (MIT, Berkeley, Purdue, NASA), ~6.000 equipos (≈10% de Internet en 1988). |
+| **Impacto** *(consecuencia sobre el negocio o las personas)* | Denegación de servicio masiva (hosts inoperables por horas/días), costos de limpieza y reconexión, y consecuencia institucional: creación del CERT/CC por DARPA y primera condena bajo la Computer Fraud and Abuse Act de 1986. |
 
 **Redacción:**
 
-*Un párrafo que encadene los cuatro elementos anteriores.*
+La amenaza (Morris y su gusano autorreplicante) explotó vulnerabilidades concretas —el desbordamiento de `fingerd`, el modo DEBUG de `sendmail` y la confianza `rsh`/`rhosts`— para propagarse sobre el activo disponibilidad de los hosts ARPANET. Al hacerlo sin control de reinfección (1/7), agotó CPU y memoria y produjo el impacto de indisponibilidad masiva de ~6.000 sistemas, que derivó en costos operativos y en la creación del CERT/CC como mecanismo de coordinación nacional.
 
 ---
 
