@@ -114,25 +114,21 @@ amenaza  →  explota  →  vulnerabilidad  →  sobre  →  activo  →  produc
 
 ## A.5 — Dos controles mitigantes
 
-*Controles que, de haber estado implementados, habrían evitado o reducido el
-incidente. Específicos y justificados contra **este** caso. «Tener antivirus»
-o «capacitar a los usuarios» no califica.*
-
 ### Control 1
 
 | | |
 |---|---|
-| **Qué es** | |
-| **Propiedad de la tríada que protege** | |
-| **Por qué habría funcionado en este caso concreto** | |
+| **Qué es** | **Gestión de vulnerabilidades y parcheo continuo (Patch Management)**. Es un proceso sistemático para identificar, clasificar e instalar actualizaciones de seguridad (parches) en el software de la red. |
+| **Propiedad de la tríada que protege** | **Disponibilidad** e **Integridad** (al evitar que un atacante ejecute código que modifique el flujo del programa o tire el servicio). |
+| **Por qué habría funcionado en este caso concreto** | El gusano explotaba vulnerabilidades ya conocidas en los servicios `sendmail` (modo DEBUG) y `fingerd` (desbordamiento de búfer). Si los servidores hubiesen tenido aplicados los parches correspondientes, los vectores principales de infección habrían fallado, impidiendo que el gusano ingrese y consuma los recursos (CPU/Memoria) del sistema. |
 
 ### Control 2
 
 | | |
 |---|---|
-| **Qué es** | |
-| **Propiedad de la tríada que protege** | |
-| **Por qué habría funcionado en este caso concreto** | |
+| **Qué es** | **Desactivación de relaciones de confianza implícita y Hardening de contraseñas**. Eliminar configuraciones que permiten accesos sin contraseña entre máquinas y forzar políticas de contraseñas robustas. |
+| **Propiedad de la tríada que protege** | **Confidencialidad** e **Integridad** (asegurando que solo personal autorizado ingrese). Al bloquear accesos ilegítimos, también se preservó en este caso la **Disponibilidad**. |
+| **Por qué habría funcionado en este caso concreto** | Además de los exploits, el gusano utilizaba el comando `rsh` (Remote Shell) abusando de relaciones de confianza entre máquinas, y realizaba ataques de diccionario para adivinar contraseñas débiles. Si no hubieran existido estas configuraciones permisivas, el malware no habría podido propagarse lateralmente de forma tan agresiva. |
 
 ---
 
@@ -142,9 +138,9 @@ o «capacitar a los usuarios» no califica.*
 del fabricante, resolución judicial, paper) o secundaria (nota periodística,
 entrada de blog).*
 
-1.
-2.
-3.
+1. Federal Bureau of Investigation (FBI). (2018). *The Morris Worm: 30 Years Since First Major Attack on Internet*. https://www.fbi.gov/news/stories/morris-worm-30-years-since-first-major-attack-on-internet-110218 (Fuente secundaria).
+2. Brand, R. (2001). *The Morris Worm*. Lawrence Livermore National Laboratory (LLNL) Science & Technology Review. https://str.llnl.gov/str/October01/Brand.html (Fuente primaria, relato técnico directo de quienes frenaron el ataque).
+3. Kehoe, B. P. (1992). *Zen and the Art of the Internet: A Beginner's Guide (The Morris Internet Worm)*. Cornell University. https://www.cs.cornell.edu/courses/cs513/2005fa/L08.html (Fuente secundaria).
 
 ---
 
