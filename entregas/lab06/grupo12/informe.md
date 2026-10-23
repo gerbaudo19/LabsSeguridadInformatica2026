@@ -201,7 +201,74 @@ Utilizando herramientas especializadas de descompresión y crawling como **`git-
 
 ### P5 — Rol Defensor (3 mitigaciones)
 
-*(A completar por el grupo)*
+Como defensores de la infraestructura de PhantomCorp, seleccionamos **tres de los hallazgos más críticos** del inventario de enumeración y establecemos sus mitigaciones técnicas concretas a nivel de configuración, arquitectura y pipeline:
+
+#### 1. Mitigación para el Repositorio Git expuesto (`/.git/`)
+- **Causa raíz:** Mala práctica operativa en el despliegue al clonar el repositorio completo (`git clone` / `git pull`) directamente en el directorio raíz servido por la web (`DocumentRoot` / `/var/www/html/`), dejando accesible la carpeta oculta `.git`.
+- **Mitigación a nivel de Servidor Web (Nginx / Apache):**
+  - **En Nginx:** Bloquear de forma global e incondicional el acceso a cualquier archivo o directorio que comience con un punto (`.`):
+    ```nginx
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+        return 404; # Devolver 404 en vez de 403 para no confirmar la existencia
+    }
+    ```
+  - **En Apache (`httpd.conf` / `.htaccess`):**
+    ```apache
+    <DirectoryMatch "/\.git">
+        Require all denied
+    </DirectoryMatch>
+    ```
+- **Mitigación en el Pipeline de CI/CD (Estructural):**
+  - Prohibir el despliegue con Git en caliente sobre servidores de producción.
+  - Empaquetar y desplegar únicamente artefactos limpios de producción excluyendo metadatos de control de versiones:
+    ```bash
+    git archive --format=tar.gz -o /deploy/release.tar.gz HEAD
+    # O mediante rsync:
+    rsync -avz --exclude='.git*' ./src/ user@servidor:/var/www/html/
+    ```
+
+---
+
+#### 2. Mitigación para Métodos HTTP Peligrosos (`PUT` / `DELETE` activos)
+- **Causa raíz:** Módulos WebDAV activos o directivas por defecto excesivamente permisivas que aceptan peticiones de modificación de archivos en el sistema de ficheros sin autenticación.
+- **Mitigación a nivel de Servidor Web:**
+  - **En Nginx:** Aplicar una política de lista blanca estricta (Whitelisting), permitiendo únicamente los verbos requeridos por la aplicación pública (`GET`, `POST`, `HEAD`) y rechazando cualquier otro con código `405 Method Not Allowed`:
+    ```nginx
+    if ($request_method !~ ^(GET|HEAD|POST)$) {
+        return 405;
+    }
+    ```
+  - **En Apache:** Usar la directiva `<LimitExcept>` para deshabilitar verbos no contemplados y desinstalar/desactivar módulos de WebDAV:
+    ```apache
+    <Location "/">
+        <LimitExcept GET POST HEAD>
+            Require all denied
+        </LimitExcept>
+    </Location>
+    ```
+    Desactivar módulos innecesarios en la shell del servidor:
+    ```bash
+    a2dismod dav dav_fs
+    systemctl restart apache2
+    ```
+
+---
+
+#### 3. Mitigación para la API interna de usuarios expuesta (`/api/users`)
+- **Causa raíz:** Endpoint administrativo o de backend publicado en el mismo host perimetral sin middleware de autenticación, control de acceso basado en roles (RBAC) ni segmentación de red.
+- **Mitigación a nivel de Aplicación y API Gateway:**
+  - **Autenticación y Control de Acceso (RBAC):** Proteger el endpoint requiriendo un encabezado de autorización seguro (ej. `Authorization: Bearer <token_jwt>`). El backend debe verificar que el usuario autenticado cuente con privilegios de administrador antes de procesar la consulta; si no hay credenciales, responder `401 Unauthorized`; si carece del rol necesario, responder `403 Forbidden`.
+  - **Segmentación y Aislamiento de Red:** Mover los endpoints internos a un dominio o subred separada (ej. `internal-api.phantomcorp.lan`), o configurar el reverse proxy para permitir peticiones a `/api/` únicamente desde rangos de red internos autorizados:
+    ```nginx
+    location /api/ {
+        allow 10.0.0.0/8;    # Solo red interna corporativa
+        deny all;            # Bloquear todo el tráfico público de Internet
+    }
+    ```
+  - **Minimización de Datos y Rate Limiting:** En caso de requerirse endpoints públicos de búsqueda, nunca retornar la lista completa en un array abierto. Implementar paginación obligatoria y sanitización de datos (eliminando campos sensibles como roles internos, correos o IDs secuenciales) junto con un limitador de tasa de peticiones (Rate Limiting) para frustrar ataques de scraping masivo.
 
 ---
 
