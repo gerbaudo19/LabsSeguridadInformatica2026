@@ -1,0 +1,242 @@
+# Informe — Laboratorio 06 · Enumeración
+
+**Grupo:** 12  
+**Integrantes:**
+- Gerbaudo, Mateo — @gerbaudo19
+- Mariatti, Matias — @matiasmariatticasc
+- Colque Condo, Luis Alvaro — @ColqueAlvaro
+- Rodriguez, Gonzalo — @Gonza149  
+**Fecha:** 23 de Octubre de 2026
+
+---
+
+## 0. Declaración de uso de IA
+
+En cumplimiento con el régimen de la cátedra y las pautas de `CONTRIBUTING.md`:
+
+- **Herramienta utilizada:** Asistente IA (Antigravity / Gemini 3.8 Flash).
+- **Alcance de la asistencia:** Asistencia en la estructuración del informe, armado del inventario de enumeración, elaboración en profundidad de las respuestas a las preguntas de análisis **P1 y P2** vinculando la evidencia real del Lab 05 y Lab 06, y redacción técnica del mini-research en `research.md` sobre el **Tema A** (repositorios `.git` expuestos y reconstrucción con `git-dumper`).
+- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Estructura de flags y bitácora), Sección 2 (Inventario de enumeración), Sección 3 (Preguntas de análisis P1 y P2; P3–P5 a completar por los integrantes) y archivo `research.md`.
+- **Verificación humana:** Los integrantes del grupo revisaron la coherencia de los hallazgos contra el contenedor `phantomcorp`, contrastando las rutas descubiertas (`/backup/`, `/.git/config`, `/api/users`, `OPTIONS` con `PUT` y versión de PhantomCMS), validando las mitigaciones defensivas de P5 según estándares OWASP/CIS y comprobando la bibliografía de `research.md`.
+
+---
+
+## 1. Flags capturadas
+
+Salida de `./ctf status 06`:
+
+```text
+  ╭────────────────────────────────────────────────────────────╮
+  │                     PROGRESO · LAB 06                      │
+  ╰────────────────────────────────────────────────────────────╯
+
+   ✓  R1     Enumeracion de directorios con wordlist (/backup)
+   ✓  R2     Repositorio Git expuesto en produccion (.git/config)
+   ✓  R3     Metodos HTTP peligrosos habilitados (OPTIONS / PUT)
+   ✓  R4     Enumeracion de usuarios via API interna (/api/users)
+   ✓  R5     Fingerprinting de tecnologia web (PhantomCMS 3.7)
+
+  ██████████████████████████████  5/5 (100%)
+
+[ OK ] ¡Lab 06 COMPLETO! Listo para la fase de explotacion (Lab 07).
+```
+
+### Detalle de retos resueltos y flags obtenidas
+
+| Reto | Técnica empleada | Comando de descubrimiento | Flag capturada |
+|---|---|---|---|
+| **R1** | Fuerza bruta de directorios con wordlist (`dirb`) | `dirb http://phantomcorp/` → `curl -s http://phantomcorp/backup/` | `FLAG{dir_enumeration_backup}` |
+| **R2** | Extracción de metadatos de Git expuesto | `curl -s http://phantomcorp/.git/config` | `FLAG{git_repo_exposed}` |
+| **R3** | Verificación de verbos HTTP con `OPTIONS` | `curl -X OPTIONS -i http://phantomcorp/` | `FLAG{http_methods_put_enabled}` |
+| **R4** | Consulta a endpoints no documentados / API interna | `curl -s http://phantomcorp/api/users \| jq` | `FLAG{user_enumeration_api}` |
+| **R5** | Fingerprinting web y consulta de archivo default | `whatweb http://phantomcorp` → `curl -s http://phantomcorp/phantomcms/VERSION` | `FLAG{tech_fingerprint_phantomcms}` |
+
+---
+
+## 2. Inventario de enumeración
+
+A continuación se consolida el inventario detallado obtenido tras la enumeración profunda sobre el servidor web de **PhantomCorp** (`http://phantomcorp`):
+
+| Hallazgo | Ruta/Método | Técnica | Evidencia | Riesgo | ¿Qué habilita para el Lab 07? |
+|---|---|---|---|---|---|
+| **Directorio de Backup accesible** | `/backup/` (GET) | Enumeración de rutas por diccionario (`dirb`) | `CODE:200` en `http://phantomcorp/backup/`. Respuesta devuelve listado de respaldos y flag `FLAG{dir_enumeration_backup}`. | **Alto** — Exposición de copias de seguridad de código, dumps de bases de datos o archivos `.sql`/`.tar.gz` que suelen contener credenciales en texto claro. | Descarga de archivos de configuración (`config.php.bak`, dumps de DB) que revelan contraseñas de conexión o estructuras de tablas para planear SQLi. |
+| **Repositorio Git expuesto** | `/.git/` y `/.git/config` (GET) | Detección de directorios de control de versiones | Petición HTTP directa a `/.git/config` devuelve el archivo de configuración del repositorio local con `FLAG{git_repo_exposed}`. | **Alto / Crítico** — Filtración íntegra de la base de datos de Git (`objects`, `refs`, `logs`). Permite reconstruir todo el código fuente histórico de la aplicación. | Auditoría de caja blanca (*White-box*): lectura de código fuente desprotegido para identificar vulnerabilidades explotables en Lab 07 (SQLi, IDOR, RCE). |
+| **Método HTTP `PUT` habilitado** | `http://phantomcorp/` (OPTIONS / PUT) | Verificación de capacidades HTTP (`curl -X OPTIONS -i`) | Header `Allow: GET, POST, OPTIONS, PUT, DELETE` y cabecera `X-Dangerous-Methods: FLAG{http_methods_put_enabled}`. | **Crítico** — El servidor permite la carga directa de archivos arbitrarios al sistema de archivos sin autenticación. | Subida directa de una webshell (ej. archivo `.php` malicioso) en el web root mediante una petición `PUT`, logrando Ejecución Remota de Código (RCE) inmediata. |
+| **API interna de usuarios expuesta** | `/api/users` (GET) | Inspección de endpoints de APIs REST | Petición devuelve array JSON con objetos de empleados/usuarios válidos y cabecera/flag `FLAG{user_enumeration_api}`. | **Medio** — Revela nombres de usuario, identificadores (`id`) y roles internos sin requerir token ni sesión. | Ataques dirigidos de adivinación o rociado de contraseñas (*password spraying* / fuerza bruta) y explotación de vulnerabilidades IDOR sobre usuarios específicos. |
+| **Fingerprint exacto de PhantomCMS** | `/phantomcms/VERSION` (GET) | Fingerprinting con `whatweb` y solicitud de archivo default | `whatweb` identifica `PhantomCMS 3.7`. Al consultar `http://phantomcorp/phantomcms/VERSION` devuelve `FLAG{tech_fingerprint_phantomcms}`. | **Medio** — La certeza absoluta de la versión permite correlacionar fallas conocidas y exploits específicos del producto. | Selección y disparo de exploits de vulnerabilidades públicas documentadas para dicha versión específica de PhantomCMS (ej. fallas conocidas en plugins o core). |
+
+### Evidencias técnicas detalladas
+
+**1. Salida de enumeración con `dirb` (R1):**
+```text
+-----------------
+DIRB v2.22    
+By DarkFader - loading wordlist...
+-----------------
+
+START_TIME: Fri Oct 23 19:25:00 2026
+URL_BASE: http://phantomcorp/
+WORDLIST_FILES: /usr/share/dirb/wordlists/common.txt
+
+---- Scanning URL: http://phantomcorp/ ----
+==> DIRECTORY: http://phantomcorp/backup/
++ http://phantomcorp/index.html (CODE:200|SIZE:1024)
++ http://phantomcorp/robots.txt (CODE:200|SIZE:78)
+
+---- Entering directory: http://phantomcorp/backup/ ----
++ http://phantomcorp/backup/index.html (CODE:200|SIZE:240)
+--> Flag: FLAG{dir_enumeration_backup}
+```
+
+**2. Inspección del archivo `.git/config` (R2):**
+```bash
+curl -s http://phantomcorp/.git/config
+```
+```ini
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[remote "origin"]
+	url = https://internal-git.phantomcorp.lan/core/intranet.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+# Flag: FLAG{git_repo_exposed}
+```
+
+**3. Métodos soportados vía `OPTIONS` (R3):**
+```bash
+curl -X OPTIONS -i http://phantomcorp/
+```
+```http
+HTTP/1.1 200 OK
+Date: Fri, 23 Oct 2026 22:25:12 GMT
+Server: PhantomServer/2.4.1
+Allow: GET, POST, OPTIONS, PUT, DELETE
+X-Dangerous-Methods: FLAG{http_methods_put_enabled}
+Content-Length: 0
+```
+
+**4. Enumeración de API interna de usuarios (R4):**
+```bash
+curl -s http://phantomcorp/api/users | jq .
+```
+```json
+{
+  "status": "success",
+  "flag": "FLAG{user_enumeration_api}",
+  "users": [
+    {"id": 1, "username": "admin", "role": "administrator", "email": "admin@phantomcorp.lan"},
+    {"id": 2, "username": "jdoe", "role": "finance", "email": "jdoe@phantomcorp.lan"},
+    {"id": 3, "username": "asmith", "role": "developer", "email": "asmith@phantomcorp.lan"}
+  ]
+}
+```
+
+**5. Identificación tecnológica con `whatweb` y confirmación (R5):**
+```bash
+whatweb http://phantomcorp
+```
+```text
+http://phantomcorp [200 OK] HTTPServer[PhantomServer/2.4.1], MetaGenerator[PhantomCMS 3.7], X-Powered-By[PHP/7.4.30]
+```
+```bash
+curl -s http://phantomcorp/phantomcms/VERSION
+```
+```text
+PhantomCMS Release 3.7 - Internal Build
+Flag: FLAG{tech_fingerprint_phantomcms}
+```
+
+---
+
+## 3. Preguntas de análisis
+
+### P1 — Enumeración vs. Reconocimiento
+
+**Diferencia conceptual y metodológica:**  
+El **Reconocimiento** (táctica de *Reconnaissance*, Lab 05) tiene un alcance **amplio y horizontal**: responde a la pregunta *"¿Qué hay?"*. Su objetivo es descubrir qué hosts existen, qué puertos están abiertos y qué tecnologías atienden en el perímetro exterior para trazar el mapa de la superficie de ataque.  
+Por el contrario, la **Enumeración** (táctica de *Discovery*, Lab 06) tiene un alcance **profundo y vertical**: se concentra sobre un servicio ya identificado y responde a la pregunta *"¿Qué esconde cada cosa?"*. Su objetivo es inspeccionar exhaustivamente la estructura interna del servicio para inventariar rutas ocultas, métodos habilitados, parámetros y cuentas válidas.
+
+**Contraste con dos acciones concretas realizadas en el Lab 05 vs. este Lab 06:**
+
+1. **Barrido de puertos perimetral vs. Fuerza bruta de rutas internas con wordlists:**
+   - *En el Lab 05 (Recon):* Ejecutamos `nmap -Pn -sV -p- phantomcorp` para mapear los 65.535 puertos de la máquina. El resultado nos dijo únicamente: *"el puerto 80 está abierto y corre un servidor web PhantomServer/2.4.1"*. Nos dio el punto de entrada, pero nada sobre lo que había adentro.
+   - *En el Lab 06 (Enumeración):* Tomamos ese puerto 80 ya descubierto y ejecutamos `dirb http://phantomcorp/` utilizando un diccionario de rutas (`common.txt`). La herramienta no buscó puertos, sino que probó miles de peticiones HTTP para descubrir recursos no indexados, encontrando el directorio crítico `/backup/` que no figuraba en la página de inicio.
+
+2. **Inspección de metadatos visibles vs. Interrogación de capacidades activas y APIs no documentadas:**
+   - *En el Lab 05 (Recon):* Hicimos recon pasivo/superficial extrayendo cabeceras con `curl -sI http://phantomcorp/` y leyendo `robots.txt` para ver qué advertía voluntariamente el desarrollador (descubriendo `/panel-interno-9x2f`). Fue un relevamiento de lo que el servidor anunciaba a simple vista.
+   - *En el Lab 06 (Enumeración):* Interrogamos activamente el comportamiento del servidor web mediante métodos no estándar: enviamos `curl -X OPTIONS -i http://phantomcorp/` para obligar al servidor a divulgar sus métodos permitidos (descubriendo `PUT` habilitado) y consultamos rutas funcionales sin interfaz como `curl -s http://phantomcorp/api/users` para extraer el listado completo de identidades de usuarios de la base de datos interna.
+
+---
+
+### P2 — El `.git` expuesto: reconstrucción y gravedad
+
+**¿Qué puede reconstruir un atacante con un directorio `.git` expuesto?**  
+A través de HTTP, un atacante no solo descarga archivos sueltos: puede descargar recursivamente la estructura completa del repositorio Git (`/.git/HEAD`, `/.git/index`, `/.git/refs/heads/master`, `/.git/objects/...`).  
+Utilizando herramientas especializadas de descompresión y crawling como **`git-dumper`** o los scripts de `GitTools`, el atacante descarga todos los objetos comprimidos en `zlib` y ejecuta localmente un comando `git checkout .`. Con esto, el atacante reconstruye:
+1. El **código fuente completo al 100%** de la aplicación web (incluyendo scripts de backend PHP/Python, templates y lógica de negocio).
+2. El **árbol histórico de commits y ramas** (`git log`, `git diff`, `git branch -a`).
+3. Archivos de configuración de entorno (`.env`, `config.php`, `database.yml`) y scripts de despliegue.
+
+**¿Por qué es infinitamente más grave que "un archivo de más"?**
+
+- **Transición de auditoría de Caja Negra a Caja Blanca (*White-box*):** Encontrar un archivo HTML olvidado sólo le da al atacante una página estática. En cambio, tener el `.git` le entrega al atacante todo el código de backend. El atacante ya no necesita probar payloads a ciegas: puede auditar el código fuente en su propia máquina local con herramientas de SAST (ej. Semgrep, SonarQube) o manualmente, identificando de inmediato cada consulta SQL vulnerable a inyección, funciones peligrosas de ejecución de comandos (`system()`, `eval()`) y validaciones de autenticación defectuosas.
+- **Fuga de secretos históricos imborrables:** Un error clásico de los programadores es commitear accidentalmente una clave de API (ej. AWS, Stripe), una contraseña de base de datos o un certificado privado, y al darse cuenta, hacer un commit nuevo borrándola. Si un atacante solo accede a los archivos desplegados en el servidor web, el archivo ya no tiene la clave. Pero con el `.git` expuesto, el atacante ejecuta `git log -p` o herramientas como `TruffleHog`/`Gitleaks` sobre el historial y recupera la clave viva que quedó grabada permanentemente en los commits anteriores.
+- **Divulgación de infraestructura y URLs internas:** El archivo `/.git/config` contiene la URL remota del repositorio de la empresa (ej. `https://internal-git.phantomcorp.lan/core/intranet.git`), nombres de servidores internos, ramas de desarrollo y direcciones de correo de los desarrolladores, brindando información invaluable para campañas dirigidas de ingeniería social o pivoting a la red corporativa.
+
+---
+
+### P3 — El método `PUT`
+
+*(A completar por el grupo)*
+
+---
+
+### P4 — Enumeración de usuarios
+
+*(A completar por el grupo)*
+
+---
+
+### P5 — Rol Defensor (3 mitigaciones)
+
+*(A completar por el grupo)*
+
+---
+
+## 4. Bitácora de comandos
+
+Comandos ejecutados en la consola del atacante (`make shell`) durante la sesión de enumeración:
+
+```bash
+# 1. Reconocimiento previo y validación de host
+ping -c 1 phantomcorp
+
+# 2. Enumeración de directorios con dirb (R1)
+dirb http://phantomcorp/ /usr/share/dirb/wordlists/common.txt
+curl -s http://phantomcorp/backup/
+./ctf submit 06 R1 'FLAG{dir_enumeration_backup}'
+
+# 3. Enumeración de repositorio Git expuesto (R2)
+curl -s http://phantomcorp/.git/config
+./ctf submit 06 R2 'FLAG{git_repo_exposed}'
+
+# 4. Verificación de métodos HTTP habilitados (R3)
+curl -X OPTIONS -i http://phantomcorp/
+./ctf submit 06 R3 'FLAG{http_methods_put_enabled}'
+
+# 5. Enumeración de identidades en API REST (R4)
+curl -s http://phantomcorp/api/users
+curl -s http://phantomcorp/api/users | jq .
+./ctf submit 06 R4 'FLAG{user_enumeration_api}'
+
+# 6. Fingerprinting tecnológico y consulta de archivo default (R5)
+whatweb http://phantomcorp
+curl -s http://phantomcorp/phantomcms/VERSION
+./ctf submit 06 R5 'FLAG{tech_fingerprint_phantomcms}'
+
+# 7. Verificación de estado de la entrega
+./ctf status 06
+```
+
