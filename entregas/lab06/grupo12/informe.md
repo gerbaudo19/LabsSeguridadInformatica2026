@@ -15,9 +15,9 @@
 En cumplimiento con el régimen de la cátedra y las pautas de `CONTRIBUTING.md`:
 
 - **Herramienta utilizada:** Asistente IA (Antigravity / Gemini 3.8 Flash).
-- **Alcance de la asistencia:** Asistencia en la estructuración del informe, armado del inventario de enumeración, elaboración en profundidad de las respuestas a las preguntas de análisis **P1 y P2** vinculando la evidencia real del Lab 05 y Lab 06, y redacción técnica del mini-research en `research.md` sobre el **Tema A** (repositorios `.git` expuestos y reconstrucción con `git-dumper`).
-- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Estructura de flags y bitácora), Sección 2 (Inventario de enumeración), Sección 3 (Preguntas de análisis P1 y P2; P3–P5 a completar por los integrantes) y archivo `research.md`.
-- **Verificación humana:** Los integrantes del grupo revisaron la coherencia de los hallazgos contra el contenedor `phantomcorp`, contrastando las rutas descubiertas (`/backup/`, `/.git/config`, `/api/users`, `OPTIONS` con `PUT` y versión de PhantomCMS), validando las mitigaciones defensivas de P5 según estándares OWASP/CIS y comprobando la bibliografía de `research.md`.
+- **Alcance de la asistencia:** Asistencia en la estructuración del informe, armado del inventario de enumeración, elaboración en profundidad de las respuestas a las preguntas de análisis **P1 y P2** vinculando la evidencia real del Lab 05 y Lab 06, redacción técnica del mini-research en `research.md` sobre el **Tema A** (repositorios `.git` expuestos y reconstrucción con `git-dumper`), fundamentación técnica del método HTTP PUT y vectores de enumeración de identidades en **P3** (@matiasmariatticasc), y estructuración de mitigaciones perimetrales y de pipeline en **P5** (@gerbaudo19).
+- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Estructura de flags y bitácora), Sección 2 (Inventario de enumeración), Sección 3 (Preguntas de análisis: P1 y P2 por @Gonza149; P3 por @matiasmariatticasc; P4 a completar por @ColqueAlvaro; P5 por @gerbaudo19) y archivo `research.md`.
+- **Verificación humana:** Los integrantes del grupo revisaron la coherencia de los hallazgos contra el contenedor `phantomcorp`, contrastando las rutas descubiertas (`/backup/`, `/.git/config`, `/api/users`, `OPTIONS` con `PUT` y versión de PhantomCMS). Para P3 se verificaron las especificaciones HTTP (RFC 7231/9110), clasificaciones CWE (CWE-434) y riesgos asociados a métodos no seguros. Para P5 se validaron las directivas de servidor web (Nginx/Apache) y buenas prácticas CIS.
 
 ---
 
@@ -187,9 +187,19 @@ Utilizando herramientas especializadas de descompresión y crawling como **`git-
 
 ---
 
-### P3 — El método `PUT`
+### P3 — El método `PUT` habilitado
 
-*(A completar por el grupo)*
+**Fundamento técnico del método:**  
+En la especificación HTTP (RFC 7231 y RFC 9110), el método `PUT` está definido para solicitar que el servidor almacene la entidad adjunta en la petición bajo la URI suministrada. A diferencia de `POST` (que envía datos a un recurso para que este los procese según su propia lógica interna), `PUT` es idempotente y apunta a la creación o reemplazo directo del archivo en el sistema de archivos del servidor.
+
+**Mecanismo del ataque concreto y vectores de riesgo:**
+
+1. **Subida arbitraria de archivos ejecutables (CWE-434):**
+   Al consultar `curl -X OPTIONS -i http://phantomcorp/`, la cabecera `Allow: GET, POST, OPTIONS, PUT, DELETE` confirmó que `PUT` está admitido sin requerir autenticación ni verificación de permisos. Un atacante puede enviar una petición HTTP con el método `PUT` hacia una ruta como `/test.php` adjuntando en el cuerpo del mensaje un script ejecutable que invoque comandos o exponga funciones del sistema operativo.
+2. **Procesamiento por el servidor web y ejecución remota de código (RCE):**
+   Dado que el servidor web tiene el intérprete PHP activo (identificado durante el fingerprinting como `PHP/7.4.30`) y el archivo se almacena directamente en la raíz de documentos web (*DocumentRoot*), cualquier solicitud posterior mediante `GET /test.php` forzará al servidor a interpretar el código en lugar de servirlo como texto plano. Esto deriva en ejecución remota de código (RCE) bajo el contexto y privilegios de la cuenta de servicio del servidor web (`www-data`).
+3. **Desfiguración (*Defacement*) y alteración de integridad:**
+   Aun en entornos donde no se interpreten scripts dinámicos, la capacidad irrestricta de `PUT` permite sobreescribir archivos estáticos existentes (por ejemplo `index.html`), afectando la integridad del sitio o interrumpiendo la disponibilidad de servicios críticos.
 
 ---
 
