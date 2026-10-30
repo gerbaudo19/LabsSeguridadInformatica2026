@@ -15,8 +15,8 @@
 En cumplimiento con el régimen de la cátedra y las pautas de `CONTRIBUTING.md`:
 
 - **Herramienta utilizada:** Asistente IA (Antigravity / Gemini 3.8 Flash).
-- **Alcance de la asistencia:** Asistencia en la inicialización de la entrega, estructuración del informe técnico, configuración del entorno de documentación para el grupo y registro de captura de banderas del CTF (@gerbaudo19); asistencia en la documentación analítica de los vectores explotados, consultas y comandos resultantes, evaluación de impacto, defensas técnicas en la Sección 2 (Tabla de explotación R1-R5) y estructuración de la Sección 4 (Bitácora de comandos) (@matiasmariatticasc).
-- **Partes originadas o modificadas:** Inicialización de `INTEGRANTES.md`, Sección 0 (Declaración de uso de IA) y Sección 1 (Flags capturadas de R1 a R5) por @gerbaudo19; Sección 2 (Tabla de explotación) y Sección 4 (Bitácora de comandos) por @matiasmariatticasc; Sección 3: preguntas de análisis P1, P2 y P3 por @ColqueAlvaro; P4 y P5 a completar por @Gonza149.
+- **Alcance de la asistencia:** Asistencia en la inicialización de la entrega, estructuración del informe técnico, configuración del entorno de documentación para el grupo y registro de captura de banderas del CTF (@gerbaudo19); asistencia en la documentación analítica de los vectores explotados, consultas y comandos resultantes, evaluación de impacto, defensas técnicas en la Sección 2 (Tabla de explotación R1-R5) y estructuración de la Sección 4 (Bitácora de comandos) (@matiasmariatticasc); asistencia en la redacción técnica de las preguntas P1–P3 (@ColqueAlvaro); asistencia en la fundamentación arquitectónica de P4 (consultas parametrizadas) y P5 (control de acceso del lado servidor frente a IDOR), así como en la redacción del mini-research sobre sentencias preparadas en `research.md` (@Gonza149).
+- **Partes originadas o modificadas:** Inicialización de `INTEGRANTES.md`, Sección 0 (Declaración de uso de IA) y Sección 1 (Flags capturadas de R1 a R5) por @gerbaudo19; Sección 2 (Tabla de explotación) y Sección 4 (Bitácora de comandos) por @matiasmariatticasc; Sección 3: preguntas de análisis P1, P2 y P3 por @ColqueAlvaro; Sección 3: preguntas de análisis P4 y P5 y archivo `research.md` por @Gonza149.
 - **Verificación humana:** Se verificaron las credenciales y roles de los integrantes del Grupo 12, se contrastaron los identificadores y hashes de los retos R1 a R5 contra `retos.manifest`. Para la Sección 2 y 4, se contrastó cada payload contra el código fuente del backend (`server.py`), validando que la sintaxis de las consultas resultantes en SQLite, comandos en bash y resoluciones de ruta canónica reflejen con precisión la ejecución del servidor vulnerable, así como las recomendaciones de mitigación según OWASP (ASVS y Top 10:2021).
 
 ---
@@ -103,9 +103,59 @@ La ejecución remota de comandos (RCE) obtenida en el reto R3 mediante la inyecc
 5. **Movimiento lateral y Pivoting (Lab 08):**
    Utilizar la máquina comprometida como cabeza de puente (*pivot*) para explorar segmentos de red internos inaccesibles desde el exterior (por ejemplo, el host interno de base de datos `phantomcorp-db`), expandiendo el compromiso a través de la infraestructura corporativa.
 
-**P4 — por qué parametrizar mata la SQLi.**
+### P4 — Por qué las consultas parametrizadas (Prepared Statements) matan la SQLi de raíz
 
-**P5 — dónde va el control de acceso (IDOR).**
+La inyección SQL ocurre exclusivamente cuando el motor de base de datos recibe una única cadena de texto donde las **instrucciones del lenguaje (código SQL)** y la **entrada del usuario (datos)** ya fueron concatenadas previamente por la aplicación, obligando al analizador sintáctico (*parser*) del motor a adivinar dónde termina un dato y dónde empieza un operador lógico.
+
+Las **consultas parametrizadas** (*Prepared Statements*) eliminan esta vulnerabilidad de raíz porque **separan estructural y temporalmente el canal de código del canal de datos** en dos fases estrictamente independientes dentro del motor relacional (en el caso del portal de PhantomCorp, SQLite a través del módulo `sqlite3` de Python):
+
+1. **Fase 1 — Preparación y compilación del árbol sintáctico (`sqlite3_prepare_v2`):**
+   La aplicación envía primero la plantilla estática de la consulta utilizando marcadores de posición (*placeholders* `?`), sin incluir ningún dato del usuario:
+   ```python
+   # Remedio para R1 (POST /login) en server.py
+   sql = "SELECT user, rol FROM users WHERE user = ? AND pass = ?"
+   fila = DB.execute(sql, (user, pw)).fetchone()
+   ```
+   En este instante, el motor SQLite realiza el análisis léxico, construye el **Árbol de Sintaxis Abstracta (AST)** y compila el plan de ejecución en bytecode de su máquina virtual interna (VDBE). La estructura lógica de la consulta queda **congelada e inmutable**: tiene exactamente dos predicados unidos por un `AND`, y ningún paso posterior vuelve a invocar al parser SQL.
+
+2. **Fase 2 — Enlace de parámetros (`sqlite3_bind_text`) y ejecución (`sqlite3_step`):**
+   Recién cuando el plan de ejecución ya está compilado, los valores ingresados por el usuario (`user` y `pw`) se envían por separado y se enlazan directamente a los registros de memoria asignados a cada placeholder `?` como escalares literales puros (tipo `TEXT`).
+   - Si el atacante envía `user = "admin' --"`, el motor **no** interpreta la comilla simple `'` como cierre de cadena ni `--` como comentario; simplemente busca en la columna `user` un registro cuyo nombre sea literalmente la cadena de 9 caracteres `admin' --`, y además exige que la columna `pass` coincida con el segundo parámetro.
+   - Del mismo modo, en el buscador del reto R2 (`GET /buscar`), al parametrizar como `DB.execute("SELECT nombre, precio FROM productos WHERE nombre LIKE ?", (f"%{termino}%",))`, el payload `' UNION SELECT clave, valor FROM secrets --` jamás puede anexar un `UNION` al árbol sintáctico porque el AST ya fue cerrado en la Fase 1.
+
+Por eso parametrizar erradica la SQLi de raíz: a diferencia del filtrado o escapado manual de caracteres (`replace("'", "\\'")`), que intenta adivinar qué símbolos son peligrosos, las consultas parametrizadas hacen que sea **arquitectónicamente imposible** que un dato modifique la gramática de la consulta.
+
+### P5 — Por qué el control de acceso (IDOR) no puede depender del cliente y dónde debe implementarse
+
+En el reto R5 (`GET /perfil?id=3`), la aplicación curiosamente sí utiliza una consulta parametrizada (`SELECT id,user,rol,nota_privada FROM users WHERE id=?`), por lo que no es vulnerable a SQLi; sin embargo, sufre una falla crítica de **Control de Acceso Roto (*Broken Object Level Authorization* — BOLA / IDOR, OWASP A01:2021)** que permite leer la nota privada del administrador simplemente cambiando el parámetro a `?id=1`.
+
+**¿Por qué el control de acceso jamás puede depender del lado del cliente?**
+Todo lo que reside o se origina en el cliente (navegador web, aplicación móvil, interfaz HTML/JS, parámetros de URL, campos `<input type="hidden">`, cabeceras HTTP o cookies no firmadas) se ejecuta fuera del perímetro de confianza del servidor y está bajo el **control absoluto del usuario/atacante**:
+- Aunque la interfaz gráfica del portal solo muestre un botón hacia *"Mi perfil (`?id=3`)"* y oculte los enlaces a otros perfiles, un atacante no está obligado a usar los botones de la interfaz: puede interceptar la petición con un proxy (Burp Suite / OWASP ZAP), modificar la barra de direcciones del navegador o invocar directamente `curl -s "http://phantomcorp/perfil?id=1"`.
+- Confiar en que el cliente "no va a cambiar el `id`" equivale a **seguridad por oscuridad**, no a un control de acceso real.
+
+**¿Dónde y cómo debe implementarse la verificación?**
+El control de acceso debe ejecutarse **de forma obligatoria en el servidor (Backend)**, en cada petición (*per-request authorization check*), aplicando el principio de **denegar por defecto (*Deny by Default*)**:
+
+1. **Derivación directa desde el contexto de sesión del servidor (Patrón recomendado para perfil propio):**
+   Si el endpoint devuelve el perfil del propio usuario logueado (`/perfil`), la aplicación ni siquiera debe recibir un parámetro `id` desde el cliente. El servidor debe identificar al usuario a partir de su token o sesión autenticada del lado del servidor y consultar únicamente ese registro:
+   ```python
+   # El ID se obtiene de la sesión validada en el servidor, NO del query string
+   current_user_id = session.get("user_id")
+   if not current_user_id:
+       self._send(401, "No autenticado"); return
+   fila = DB.execute("SELECT id, user, rol, nota_privada FROM users WHERE id = ?", (current_user_id,)).fetchone()
+   ```
+2. **Verificación explícita de pertenencia y rol (Autorización a nivel de objeto — BOLA):**
+   Si por diseño de negocio el endpoint requiere recibir el identificador del recurso (`/perfil?id=<pid>`), el backend debe verificar antes de devolver los datos que el sujeto autenticado sea el **propietario** de ese objeto o posea el **rol administrativo** explícito para auditarlo:
+   ```python
+   requested_id = int(q.get("id", [0])[0])
+   if session.user_id != requested_id and session.rol != "admin":
+       self._send(403, "Acceso denegado: no tiene permisos sobre este recurso")
+       return
+   ```
+3. **Defensa en profundidad (Identificadores indirectos / UUIDv4):**
+   Reemplazar los IDs numéricos autoincrementales predecibles (`1, 2, 3...`) por identificadores únicos universalmente aleatorios (`UUIDv4`) mitiga la enumeración masiva por fuerza bruta, pero siempre como **complemento** y nunca como sustituto de la validación de autorización en el servidor.
 
 ---
 
