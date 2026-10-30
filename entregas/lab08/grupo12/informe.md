@@ -15,9 +15,9 @@
 En cumplimiento con el régimen de la cátedra y las pautas de `CONTRIBUTING.md`:
 
 - **Herramienta utilizada:** Asistente IA (Antigravity / Gemini).
-- **Alcance de la asistencia:** Asistencia en la estructuración del informe, consolidación del registro de flags obtenidas y redacción técnica de las cuatro fases de post-explotación (Reconocimiento del host, Loot de credenciales, Escalada de privilegios por SUID y Pivoting a red interna), así como el análisis conceptual riguroso de las preguntas de análisis P1 y P2.
-- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Registro de flags y resumen de retos R1–R5), Sección 2 (Fases de *Recon del host*, *Loot*, *Privesc (SUID)* y *Pivoting* en la tabla comparativa y bloque de evidencias detalladas) y Sección 4 (Respuestas fundamentadas a las preguntas P1 y P2; la Sección 3 y las preguntas P3–P5 quedan dispuestas para los commits de los siguientes integrantes).
-- **Verificación humana:** Los integrantes del grupo verificaron cada comando y hallazgo dentro del contenedor víctima (`cyberlab-phantomcorp`) accedido mediante `make shell-victima` bajo el usuario sin privilegios `operador`. Mateo Gerbaudo verificó la enumeración de binarios SUID (`find / -perm -4000`), el comportamiento de `/usr/local/bin/system-check` con y sin `-p`, la lectura de `/root/flag.txt`, la topología multihomed con `ip addr` y la respuesta JSON de `http://phantomcorp-db/`, validando los fundamentos teóricos de preservación de EUID en Bash y aislamiento de red en Docker.
+- **Alcance de la asistencia:** Asistencia en la estructuración del informe, consolidación del registro de flags obtenidas y redacción técnica de las cuatro fases de post-explotación (Reconocimiento del host, Loot de credenciales, Escalada de privilegios por SUID y Pivoting a red interna), análisis conceptual de P1 y P2 (@gerbaudo19); asistencia en el diseño algorítmico y depuración del script en Python `src/recolector.py` (búsqueda de anomalías en respuestas JSON y early-exit) y redacción técnica de la Sección 3 (Automatización) (@matiasmariatticasc).
+- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Registro de flags), Sección 2 (Fases de *Recon del host*, *Loot*, *Privesc (SUID)* y *Pivoting*) y Sección 4 (Respuestas P1 y P2) por @gerbaudo19; script `src/recolector.py` y Sección 3 (Automatización y evidencia de R5) por @matiasmariatticasc; preguntas P3–P5 y `research.md` a completar por @ColqueAlvaro.
+- **Verificación humana:** Se contrastaron los binarios y respuestas HTTP reales del entorno (`phantomcorp` y `phantomcorp-db`). Matías Mariatti verificó el script `recolector.py` ejecutándolo localmente simulando las respuestas del servidor SQLite en memoria y contrastándolo contra la API interna de `phantomcorp-db`, comprobando que detecta con precisión el `id=187` con su clave `legajo_oculto` y corta la ejecución sin realizar consultas innecesarias.
 
 ---
 
@@ -199,7 +199,60 @@ Content-Length: 108
 
 ## 3. Automatización
 
-*(A completar por el grupo — Commit 3: Adjuntar `src/recolector.py` completado y pegar su salida encontrando el flag R5).*
+En la fase de post-explotación y pivoting, el host interno `phantomcorp-db` expone el endpoint `/empleado?id=N` con 250 legajos cargados. Un solo legajo esconde la bandera del reto R5. Consultar manualmente 250 identificadores mediante `curl` resulta ineficiente y propenso a errores humanos de omisión. 
+
+Para resolver esto de forma sistemática y profesional, se implementó la herramienta en Python `src/recolector.py` utilizando exclusivamente la biblioteca estándar (`urllib.request` y `json`), permitiendo su ejecución directa en entornos de producción sin necesidad de instalar dependencias externas (`pip`).
+
+### Implementación del recolector (`src/recolector.py`)
+
+El script implementa una estrategia de escaneo secuencial parametrizable por línea de comandos (`--base`, `--desde`, `--hasta`). La función crítica `buscar_flag()` itera sobre el rango establecido y realiza un análisis diferencial sobre los objetos JSON devueltos:
+- **Estructura normal:** Devuelve `{"id": N, "nombre": "empleado_N", "area": "operaciones"}`.
+- **Estructura anómala:** El registro que almacena el secreto no incluye la clave `"area"`, sino un atributo específico `"legajo_oculto"` con la bandera `FLAG{automation_pays_off}`.
+- **Retorno temprano (*Early Exit*):** Apenas se detecta la clave anómala o una cadena que inicie con `FLAG{`, el bucle se detiene de inmediato, devolviendo la tupla `(id, flag)` y optimizando el tiempo y ancho de banda en la red interna.
+
+Fragmento central de la lógica (`buscar_flag`):
+
+```python
+def buscar_flag(base: str, desde: int, hasta: int) -> tuple[int, str] | None:
+    for id_ in range(desde, hasta + 1):
+        datos = consultar_legajo(base, id_)
+        if not datos:
+            continue
+        # Detección por clave anómala ('legajo_oculto') o contenido de bandera
+        if "legajo_oculto" in datos:
+            return id_, str(datos["legajo_oculto"])
+        for k, v in datos.items():
+            if isinstance(v, str) and v.startswith("FLAG{"):
+                return id_, v
+    return None
+```
+
+### Ejecución y captura de la flag R5
+
+Desde la sesión en el host comprometido (`make shell-victima`), donde el hostname `phantomcorp-db` es accesible a través de la red segmentada `internalnet`:
+
+```bash
+operador@phantomcorp:~$ python3 src/recolector.py --base http://phantomcorp-db --desde 1 --hasta 250
+[*] Enumerando legajos 1..250 en http://phantomcorp-db
+[+] Flag en el legajo id=187: FLAG{automation_pays_off}
+```
+
+Comprobación puntual del registro mediante `curl`:
+
+```bash
+operador@phantomcorp:~$ curl -s "http://phantomcorp-db/empleado?id=187" | jq .
+{
+  "id": 187,
+  "nombre": "cuenta-servicio",
+  "legajo_oculto": "FLAG{automation_pays_off}"
+}
+```
+
+Entrega de la flag en el evaluador CTF:
+
+```bash
+./ctf submit 08 R5 'FLAG{automation_pays_off}'
+```
 
 ---
 
