@@ -15,9 +15,9 @@
 En cumplimiento con el régimen de la cátedra y las pautas de `CONTRIBUTING.md`:
 
 - **Herramienta utilizada:** Asistente IA (Antigravity / Gemini 3.8 Flash).
-- **Alcance de la asistencia:** Asistencia en la estructuración del informe, armado del inventario de enumeración, elaboración en profundidad de las respuestas a las preguntas de análisis **P1 y P2** vinculando la evidencia real del Lab 05 y Lab 06, redacción técnica del mini-research en `research.md` sobre el **Tema A** (repositorios `.git` expuestos y reconstrucción con `git-dumper`), fundamentación técnica del método HTTP PUT y vectores de enumeración de identidades en **P3** (@matiasmariatticasc), y estructuración de mitigaciones perimetrales y de pipeline en **P5** (@gerbaudo19).
-- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Estructura de flags y bitácora), Sección 2 (Inventario de enumeración), Sección 3 (Preguntas de análisis: P1 y P2 por @Gonza149; P3 por @matiasmariatticasc; P4 a completar por @ColqueAlvaro; P5 por @gerbaudo19) y archivo `research.md`.
-- **Verificación humana:** Los integrantes del grupo revisaron la coherencia de los hallazgos contra el contenedor `phantomcorp`, contrastando las rutas descubiertas (`/backup/`, `/.git/config`, `/api/users`, `OPTIONS` con `PUT` y versión de PhantomCMS). Para P3 se verificaron las especificaciones HTTP (RFC 7231/9110), clasificaciones CWE (CWE-434) y riesgos asociados a métodos no seguros. Para P5 se validaron las directivas de servidor web (Nginx/Apache) y buenas prácticas CIS.
+- **Alcance de la asistencia:** Asistencia en la estructuración del informe, armado del inventario de enumeración, elaboración en profundidad de las respuestas a las preguntas de análisis **P1 y P2** vinculando la evidencia real del Lab 05 y Lab 06, redacción técnica del mini-research en `research.md` sobre el **Tema A** (repositorios `.git` expuestos y reconstrucción con `git-dumper`), fundamentación técnica del método HTTP PUT en **P3** (@matiasmariatticasc), análisis del impacto de la enumeración de usuarios hacia la fase de explotación en **P4** (@ColqueAlvaro), y estructuración de mitigaciones perimetrales y de pipeline en **P5** (@gerbaudo19).
+- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Estructura de flags y bitácora), Sección 2 (Inventario de enumeración), Sección 3 (Preguntas de análisis: P1 y P2 por @Gonza149; P3 por @matiasmariatticasc; P4 por @ColqueAlvaro; P5 por @gerbaudo19) y archivo `research.md`.
+- **Verificación humana:** Los integrantes del grupo revisaron la coherencia de los hallazgos contra el contenedor `phantomcorp`, contrastando las rutas descubiertas (`/backup/`, `/.git/config`, `/api/users`, `OPTIONS` con `PUT` y versión de PhantomCMS). Para P3 se verificaron las especificaciones HTTP (RFC 7231/9110), clasificaciones CWE (CWE-434) y riesgos asociados a métodos no seguros. Para P4 se contrastaron los registros reales devueltos por `/api/users` (`admin`, `jdoe`, `asmith`) y su encadenamiento con vectores de explotación del Lab 07 (SQLi auth bypass, fuerza bruta/password spraying e IDOR). Para P5 se validaron las directivas de servidor web (Nginx/Apache) y buenas prácticas CIS.
 
 ---
 
@@ -205,7 +205,22 @@ En la especificación HTTP (RFC 7231 y RFC 9110), el método `PUT` está definid
 
 ### P4 — Enumeración de usuarios
 
-*(A completar por el grupo)*
+Al consultar el endpoint interno sin autenticación `curl -s http://phantomcorp/api/users`, la aplicación filtró una lista estructurada de usuarios reales del sistema: `admin` (`id: 1`, rol `administrator`), `jdoe` (`id: 2`, rol `finance`) y `asmith` (`id: 3`, rol `developer`), junto con sus direcciones de correo en el dominio `@phantomcorp.lan`. Aunque la respuesta no incluya hashes ni contraseñas en texto claro, exponer identidades válidas constituye una vulnerabilidad crítica (CWE-200 / OWASP API4 & API1) porque **prepara y multiplica la efectividad de la fase siguiente (Explotación — Lab 07)** en cuatro vectores directos:
+
+1. **Reducción del espacio de búsqueda a la mitad en ataques contra la autenticación:**
+   Un control de acceso por login depende del par `(usuario, contraseña)`. Cuando el atacante desconoce los nombres de usuario, debe adivinar ambas variables simultáneamente (espacio combinatorio $U \times P$). Al confirmar que `admin`, `jdoe` y `asmith` existen, la primera mitad del secreto desaparece. Esto habilita inmediatamente:
+   - **Fuerza bruta dirigida por diccionario** (con herramientas como `hydra` o `wfuzz`) concentrada únicamente sobre esas tres cuentas reales.
+   - **Password Spraying:** Probar unas pocas contraseñas corporativas previsibles (ej. `Phantom2026!`, `PhantomCorp123`) de forma horizontal sobre los usuarios confirmados, evitando disparar bloqueos por intentos fallidos (*account lockout*).
+   - **Credential Stuffing:** Cruzar los correos exactos (`jdoe@phantomcorp.lan`, `asmith@phantomcorp.lan`) contra bases de datos de filtraciones públicas para reutilizar contraseñas comprometidas.
+
+2. **Selección y priorización quirúrgica de objetivos (*Target Selection*) según su rol:**
+   La API no solo entrega el `username`, sino también el atributo `"role"`. En la fase de explotación (Lab 07), el atacante no necesita tantear a ciegas qué cuenta tiene permisos elevados: sabe de antemano que `admin` posee el rol `"administrator"` (objetivo primario para lograr control total o RCE), que `asmith` es `"developer"` (útil para acceder a repositorios, tokens o entornos de staging) y que `jdoe` opera en `"finance"` (acceso a información contable y pagos). De este modo, si en el Lab 07 existe un formulario de login vulnerable a **SQL Injection (bypass de autenticación)**, el atacante inyecta directamente `admin' -- ` sabiendo con certeza que ese identificador de cuenta existe y tiene privilegios máximos.
+
+3. **Insumo directo para explotar fallas de autorización como IDOR / BOLA:**
+   El listado expone los identificadores numéricos internos (`"id": 1`, `"id": 2`, `"id": 3`) vinculados a cada identidad y rol. En la fase de explotación (Lab 07), cuando la aplicación utilice rutas o parámetros como `/perfil?id=1`, `/api/recibos/2` o `/documentos?user_id=3` sin validar adecuadamente la sesión en el servidor, el atacante ya cuenta con el mapa exacto de IDs válidos para ejecutar ataques de **IDOR (*Insecure Direct Object Reference*)**, apuntando directamente a los recursos del administrador (`id=1`) o de finanzas (`id=2`).
+
+4. **Ingeniería social dirigida (*Spear Phishing*) y deducción de nomenclatura:**
+   Conocer la convención de nombres de usuario (inicial del nombre + apellido: `jdoe`, `asmith`), el dominio interno (`@phantomcorp.lan`) y el área funcional de cada empleado permite diseñar pretextos creíbles o ataques dirigidos contra el personal técnico y financiero.
 
 ---
 
