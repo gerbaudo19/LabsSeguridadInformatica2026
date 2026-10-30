@@ -11,7 +11,7 @@ En conformidad con las directrices éticas de la cátedra y las pautas de `CONTR
 
 - **Herramienta utilizada:** Asistente IA (Antigravity / Gemini).
 - **Alcance de la asistencia:** Asistencia en la estructuración general del informe pericial, redacción del resumen ejecutivo y análisis de cadena de custodia criptográfica en Secciones 1 y 2 (@gerbaudo19); asistencia en la correlación temporal cruzada entre logs de acceso, memoria y red para la Sección 3 (Línea de tiempo del ataque) y diseño del script forense `src/timeline.py` (@matiasmariatticasc).
-- **Partes originadas o modificadas:** Sección 1 (Resumen del incidente) y Sección 2 (Cadena de custodia y análisis de `auth.log`) por @gerbaudo19; Sección 3 (Línea de tiempo del ataque) y script `src/timeline.py` por @matiasmariatticasc; Secciones 4 a 7 a completar por @ColqueAlvaro y @Gonza149.
+- **Partes originadas o modificadas:** Sección 1 (Resumen del incidente) y Sección 2 (Cadena de custodia y análisis de `auth.log`) por @gerbaudo19; Sección 3 (Línea de tiempo del ataque) y script `src/timeline.py` por @matiasmariatticasc; Sección 4 (Tabla de IOCs) y Sección 5 (Alcance del daño y evaluación de impacto) por @ColqueAlvaro; Sección 6 (Contención y erradicación) y Sección 7 (Preguntas P1–P5) a completar por @Gonza149.
 - **Verificación humana:** Se ejecutó la verificación criptográfica con `shasum -a 256 -c` identificando el archivo manipulado. Matías Mariatti verificó y ejecutó el script `src/timeline.py` sobre `caso/logs/access.log`, comprobando que los 16 eventos de la IP atacante se clasifican con rigor en sus respectivas fases (RECON, ENUM, EXPLOIT, RCE, WEBSHELL, EXFIL) y contrastó la cronología con los artefactos de memoria (`bash_history.txt`, `pslist.txt`, `netstat.txt`).
 
 ---
@@ -170,21 +170,38 @@ $ python3 src/timeline.py caso/logs/access.log --ip 185.220.101.42
 
 ## 4. Indicadores de compromiso (IOCs)
 
-*(Sección a completar por Luis Alvaro Colque en Commit 3)*
+A partir de la correlación cruzada de las evidencias en disco (`/disco`), memoria volátil (`/memoria`) y bitácoras de red (`/logs`), se identificaron y tabularon los siguientes Indicadores de Compromiso (IOCs) para su ingesta inmediata en sistemas SIEM, EDR y firewalls perimetrales:
 
-| Tipo | Valor | Dónde apareció |
-|---|---|---|
-| IP atacante | | |
-| IP/puerto C2 | | |
-| Archivo malicioso | | |
-| Usuario backdoor | | |
-| Persistencia | | |
+| Tipo de Indicador | Valor / Patrón | Dónde apareció (Artefacto y Evidencia) | Impacto / Significado Táctico |
+|---|---|---|---|
+| **IP Atacante (Origen)** | `185.220.101.42` | `logs/access.log:1-22` | Dirección IP externa desde donde se coordinaron las fases de Reconocimiento, Fuerza Bruta (`gobuster/3.6`), SQLi (`admin'--`) y explotación de RCE en `/api/reporte`. |
+| **IP Servidor C2 / Exfil** | `45.13.37.7` | `memoria/netstat.txt:4,5`<br>`memoria/pslist.txt:6,9`<br>`memoria/bash_history.txt:4,9` | Servidor externo hosteador de malware y receptor de exfiltración. Puerto 80/TCP usado para servir `s.php` y recibir `clientes.tar.gz` vía POST; Puerto 4444/TCP usado como listener de Reverse Shell interactiva. |
+| **Conexión de Red C2 Activa** | `10.0.0.5:41022 -> 45.13.37.7:4444` (`ESTABLISHED`) | `memoria/netstat.txt:4`<br>`memoria/lsof.txt:3` | Conexión socket TCP abierta por el binario `nc` (PID 1490) bajo privilegios de root (`uid=0`), manteniendo el canal de mando bidireccional. |
+| **Artefacto Malicioso (Webshell)** | `/var/www/uploads/shell.php` | `disco/listado.txt:4`<br>`disco/var/www/uploads/shell.php.evidencia.txt`<br>`logs/access.log:20,21` | Archivo PHP malicioso (431 bytes) instalado vía `wget`. Permite ejecución remota de comandos vía parámetro `?c=` en el contexto del servidor web. Contiene bandera `FLAG{dfir_webshell_hallado}`. |
+| **Binario SUID Ilegítimo** | `/usr/local/bin/system-check` | `disco/listado.txt:5`<br>`memoria/pslist.txt:8`<br>`memoria/bash_history.txt:6` | Copia de GNU Bash (1.113.504 bytes) dotada de permisos SUID root (`-rwsr-xr-x`). Utilizada con la bandera `-p` para preservar `euid=0` y evadir la revocación de privilegios de shell. |
+| **Archivo de Exfiltración** | `/tmp/.exfil/clientes.tar.gz` | `disco/listado.txt:7`<br>`memoria/lsof.txt:5`<br>`memoria/bash_history.txt:8` | Archivo comprimido (48.210 bytes) empaquetado por el atacante para consolidar la base de datos de clientes `/app/priv/clientes.db.txt` antes de su transmisión al exterior. |
+| **Archivo Testigo (RCE)** | `/tmp/.p` | `disco/listado.txt:3`<br>`logs/access.log:19` | Archivo temporal (12 bytes) creado a las 02:18 UTC confirmando ejecución de código exitosa (`FLAG{dfir_vector_sqli}`). |
+| **Usuario Backdoor** | `phantom-svc` (UID: `0`, GID: `0`) | `disco/etc/passwd.snippet:4` | Cuenta oculta agregada directamente a `/etc/passwd` con privilegios de superusuario (`root`), shell `/bin/bash` y home `/root`, asegurando persistencia a nivel de sistema operativo. |
+| **Persistencia (Cronjob)** | `/etc/cron.d/phantom-maint` | `disco/listado.txt:6` | Archivo de tarea programada (62 bytes) configurado en el demonio cron para reconectar automáticamente la shell reversa hacia el servidor C2 de forma periódica. |
 
 ---
 
 ## 5. Alcance del daño
 
-*(Sección a completar por Luis Alvaro Colque en Commit 3)*
+El análisis forense digital integral sobre las tres dimensiones fundamentales de la información (Tríada CIA) permite determinar el impacto real del incidente:
+
+### 1. Compromiso de la Confidencialidad: CRÍTICO (Total)
+- **Fuga masiva de la base de datos de clientes:** Se confirmó la exfiltración efectiva del archivo `/app/priv/clientes.db.txt` hacia el servidor C2 `45.13.37.7`. A las 02:28:10 UTC el atacante empaquetó los registros en `/tmp/.exfil/clientes.tar.gz` (48.210 bytes) y a las 02:29:20 UTC ejecutó un `curl -s -F "f=@..."` exitoso (`HTTP 200`). El incidente constituye una filtración masiva de datos personales protegidos por la Ley 25.326 de Protección de los Datos Personales.
+- **Compromiso de secretos y configuraciones institucionales:** El atacante leyó de forma no autorizada el archivo `/var/www/.env` y el backup `/backup/rrhh.conf`, apropiándose del token de API `phantom-api-7c1e` y de las cadenas de conexión a servicios de backend.
+
+### 2. Compromiso de la Integridad: CRÍTICO (Total)
+- **Control total de superusuario (`root`):** Mediante la explotación del binario SUID `/usr/local/bin/system-check -p`, el atacante elevó privilegios al nivel de kernel (`euid=0`), vulnerando la integridad absoluta del sistema operativo.
+- **Modificación arbitraria del sistema de archivos:** Se crearon binarios maliciosos y webshells en la raíz web (`/var/www/uploads/shell.php`), se alteró la tabla de cuentas del sistema (`/etc/passwd`) para plantar la cuenta `phantom-svc`, y se configuraron tareas de persistencia en `/etc/cron.d/phantom-maint`.
+- **Sabotaje de evidencias y Anti-Forensics:** A las 02:30:15 UTC el atacante ejecutó `history -c` en memoria y adulteró deliberadamente el archivo `logs/auth.log` eliminando las entradas de auditoría de su sesión para encubrir la escalada y romper la cadena de custodia (`FLAG{dfir_custodia_alterada}`).
+
+### 3. Compromiso de la Disponibilidad: PARCIAL / RIESGO OPERATIVO CRÍTICO
+- **Estado operativo durante el ataque:** El servidor web `nginx` se mantuvo en estado `LISTEN` (PID 812) respondiendo solicitudes para evitar levantar sospechas inmediatas.
+- **Riesgo latente de interrupción total:** Al poseer persistencia redundante (cronjob activo cada minuto, webshell y cuenta UID 0), el atacante disponía de capacidad inmediata para ejecutar ransomware, sobrescribir el disco o apagar el servidor a voluntad. El servidor se encuentra técnicamente bajo control hostil y debe ser retirado de operación y aislado de la red de inmediato.
 
 ---
 
