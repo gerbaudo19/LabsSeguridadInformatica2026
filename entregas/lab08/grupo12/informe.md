@@ -16,7 +16,7 @@ En cumplimiento con el régimen de la cátedra y las pautas de `CONTRIBUTING.md`
 
 - **Herramienta utilizada:** Asistente IA (Antigravity / Gemini).
 - **Alcance de la asistencia:** Asistencia en la estructuración del informe, consolidación del registro de flags obtenidas y redacción técnica de las cuatro fases de post-explotación (Reconocimiento del host, Loot de credenciales, Escalada de privilegios por SUID y Pivoting a red interna), análisis conceptual de P1 y P2 (@gerbaudo19); asistencia en el diseño algorítmico y depuración del script en Python `src/recolector.py` (búsqueda de anomalías en respuestas JSON y early-exit) y redacción técnica de la Sección 3 (Automatización) (@matiasmariatticasc).
-- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Registro de flags), Sección 2 (Fases de *Recon del host*, *Loot*, *Privesc (SUID)* y *Pivoting*) y Sección 4 (Respuestas P1 y P2) por @gerbaudo19; script `src/recolector.py` y Sección 3 (Automatización y evidencia de R5) por @matiasmariatticasc; preguntas P3–P5 y `research.md` a completar por @ColqueAlvaro.
+- **Partes originadas o modificadas:** Sección 0 (Declaración de IA), Sección 1 (Registro de flags), Sección 2 (Fases de *Recon del host*, *Loot*, *Privesc (SUID)* y *Pivoting*) y Sección 4 (Respuestas P1 y P2) por @gerbaudo19; script `src/recolector.py` y Sección 3 (Automatización y evidencia de R5) por @matiasmariatticasc; preguntas P3–P5 y `research.md` por @ColqueAlvaro.
 - **Verificación humana:** Se contrastaron los binarios y respuestas HTTP reales del entorno (`phantomcorp` y `phantomcorp-db`). Matías Mariatti verificó el script `recolector.py` ejecutándolo localmente simulando las respuestas del servidor SQLite en memoria y contrastándolo contra la API interna de `phantomcorp-db`, comprobando que detecta con precisión el `id=187` con su clave `legajo_oculto` y corta la ejecución sin realizar consultas innecesarias.
 
 ---
@@ -325,17 +325,61 @@ En términos de ciberseguridad corporativa, este escenario simula con exactitud 
 
 ### P3 — Cómo evitar secretos en `.env` / `.bash_history`
 
-*(A completar por el grupo — Commit 4)*
+Durante la fase de Loot (reto R2), descubrimos credenciales críticas en texto plano leyendo `/var/www/.env` y contraseñas pasadas como argumentos en `/home/operador/.bash_history`. Para erradicar estas malas prácticas en entornos corporativos y de producción:
+
+1. **Mitigación para archivos `.env` en servidores:**
+   - *El problema de los archivos planos en disco:* Un archivo `.env` estático en el disco queda al alcance de cualquier proceso local comprometido (como el usuario `operador` o `www-data`) o ante vulnerabilidades web tipo LFI/Path Traversal.
+   - *Solución estándar — Gestores centralizados de secretos (Secret Vaults):* Adoptar herramientas dedicadas como **HashiCorp Vault**, **AWS Secrets Manager**, **Azure Key Vault** o **GCP Secret Manager**. La aplicación no lee un archivo estático en disco; al iniciar, se autentica mediante una identidad de máquina (ej. IAM Role / Service Account) y solicita secretos efímeros en memoria a través de una API cifrada con rotación automática y auditoría de acceso.
+   - *Inyección en tiempo de ejecución / Contenedores:* Si se emplean contenedores (Docker/Kubernetes), utilizar secretos de Kubernetes (`Secret` montados en memoria tmpfs) o inyectar las variables directamente en el proceso mediante el runtime de orquestación, asegurando que nunca toquen el sistema de archivos persistente ni se almacenen en imágenes de contenedor.
+   - *Permisos estrictos del sistema de archivos (Least Privilege):* Si temporalmente debe existir un archivo de entorno, debe pertenecer exclusivamente al usuario del proceso web (`chown www-data:www-data .env`), con permisos restrictivos `chmod 400` o `600`, impidiendo que otros usuarios locales del sistema operativo puedan leerlo.
+
+2. **Mitigación para fugas en `.bash_history`:**
+   - *El problema del historial de shell:* Por defecto, Bash registra cada comando ejecutado en `~/.bash_history`. Si un operador escribe contraseñas o tokens como flags de línea de comandos (ej. `mysql -u root -pPassword123` o `curl -H "Authorization: Bearer <token>"`), el secreto queda grabado de manera permanente e indexable en texto plano.
+   - *Configuración defensiva de Bash:*
+     - Habilitar `HISTCONTROL=ignorespace` o `ignoreboth` en `/etc/profile` o `~/.bashrc`, lo que permite que cualquier comando precedido por un espacio inicial en blanco no se guarde en el historial.
+     - Definir `HISTIGNORE` con patrones de comandos que suelen contener secretos (ej. `export HISTIGNORE="*password*:*token*:*secret*:mysql *:curl *"`).
+     - Deshabilitar el historial en cuentas de servicio o entornos compartidos (`export HISTFILESIZE=0` o `export HISTSIZE=0`).
+   - *Uso de entradas interactivas seguras o variables de entorno temporales:* Nunca pasar secretos como argumentos de línea de comandos (donde además son visibles por cualquier usuario local mediante `ps aux`). En su lugar, utilizar prompts interactivos que lean de `stdin` sin eco (ej. `read -s PASSWORD`), archivos temporales con permisos 600 pasados vía descriptores de archivo, o pipes (`echo "$SECRET" | comando`).
 
 ---
 
 ### P4 — Qué decidiste vos que el script no decide solo
 
-*(A completar por el grupo — Commit 4)*
+El script de automatización (`src/recolector.py`) es un motor de ejecución determinista y repetitivo: su fortaleza radica en la velocidad y la capacidad de iterar sobre 250 peticiones HTTP secuenciales sin cometer errores de tipeo ni omitir registros. Sin embargo, el script es completamente ciego al contexto y carece de criterio analítico. Antes de que el script pudiese ejecutar una sola línea de código, el analista humano tuvo que tomar decisiones cognitivas y metodológicas determinantes:
+
+1. **Comprensión del contexto situacional y correlación de vectores:**
+   El script no sabe qué es `phantomcorp-db` ni dónde reside. El analista tuvo que correlacionar las notas de despliegue obtenidas en el Recon (`DEPLOY_NOTES.txt`), interpretar la arquitectura de doble interfaz de red (`eth0` y `eth1`) en el host víctima, deducir que `phantomcorp` podía operar como pivot hacia la subred interna y verificar manualmente que el puerto 80 del host interno respondía.
+2. **Definición de la hipótesis de búsqueda y criterio de early-exit:**
+   El analista inspeccionó manualmente la estructura JSON de un legajo ordinario (ej. `{"id": 1, "nombre": "...", "area": "..."}`). Al constatar que los campos habituales no contenían banderas, formuló la hipótesis analítica: *"el objetivo no es un dato de legajo estándar, sino una anomalía estructural en el esquema de la respuesta (una clave inesperada como `legajo_oculto` o un campo que contenga la cadena FLAG)"*. Esa definición conceptual fue la que se tradujo en la lógica condicional del script (`if "FLAG{" in r.text or "legajo_oculto" in data`).
+3. **Control de sigilo, cadencia y volumen de peticiones (OpSec):**
+   Un script lanzado a velocidad máxima genera ráfagas de tráfico anómalas que disparan alertas de IDS/IPS o bloqueos por rate limiting. El analista evaluó el volumen del espacio de búsqueda (legajos 1 al 250) y determinó que una iteración secuencial con timeout razonable era suficiente, implementando el corte inmediato (*early-exit*) apenas se detectase la flag para no seguir emitiendo peticiones innecesarias que delaten la presencia en los logs.
+4. **Manejo de contingencias y anomalías:**
+   Si la base de datos hubiese devuelto errores 500, bloqueos temporales 429 o desconexiones, un script rígido se cae o descarta los registros erróneamente. El analista humano es quien interpreta el comportamiento de la red, decide si es necesario introducir reintentos con backoff exponencial, rotar cabeceras o modificar el rango de búsqueda.
 
 ---
 
 ### P5 — Defensa para SUID y para pivoting
 
-*(A completar por el grupo — Commit 4)*
+Como equipo de defensa (Blue Team), para neutralizar de raíz los vectores de escalada de privilegios y movimiento lateral explotados en este laboratorio, se deben implementar las siguientes contramedidas técnicas:
 
+#### 1. Defensas contra binarios SUID indebidos (Principio de Mínimo Privilegio)
+- **Auditoría continua y remoción del bit SUID:**  
+  Ejecutar auditorías periódicas automatizadas en servidores y pipelines de integración continua buscando ejecutables con permisos SUID (`find / -perm -4000 -type f 2>/dev/null`). Se debe revocar inmediatamente el bit SUID de cualquier herramienta que no lo requiera de forma crítica (`chmod u-s /usr/local/bin/system-check`). Los comandos de diagnóstico o monitoreo jamás deben ejecutarse con privilegios de root por defecto.
+- **Sustitución mediante Linux Capabilities:**  
+  En lugar de otorgar el bit SUID completo (lo que concede acceso irrestricto a todas las llamadas del sistema con autoridad de root), implementar **Linux Capabilities** para conceder exclusivamente el privilegio atómico mínimo requerido. Por ejemplo, en lugar de un binario SUID root para inspeccionar sockets o tráfico de red, se aplica `setcap cap_net_raw,cap_net_admin+ep /ruta/binario`.
+- **Montaje de sistemas de archivos con la opción `nosuid`:**  
+  Configurar en `/etc/fstab` la directiva `nosuid` en todas las particiones donde usuarios o procesos puedan escribir o cargar archivos (`/tmp`, `/var/tmp`, `/dev/shm`, `/home`). Con esta bandera, el kernel ignora el bit SUID aunque exista un binario malicioso compilado o descargado en esos directorios.
+- **Hardening de código interno:**  
+  Si un binario propietario requiere elevar privilegios para una acción puntual, debe programarse descartando los privilegios de root (`setresuid(ruid, ruid, ruid)`) inmediatamente después de completar la operación privilegiada, sanitizando estrictamente la variable `$PATH` y evitando invocar shells o intérpretes pasándole argumentos del usuario.
+
+#### 2. Defensas contra el Pivoting y movimiento lateral (Zero Trust y Microsegmentación)
+- **Microsegmentación y Filtrado de Tráfico Saliente (*Egress Filtering*):**  
+  La segmentación en subredes es insuficiente si cualquier proceso del host perimetral puede hablar libremente con los servicios internos. En `phantomcorp` se debe configurar el firewall local (`iptables` / `nftables`) con política *default-drop* para conexiones salientes: únicamente el proceso del servidor web (identificado por su UID de servicio) debe tener permitido iniciar conexiones TCP al puerto específico de `phantomcorp-db`. Se debe denegar cualquier intento de conexión saliente iniciado por shells de usuarios interactivos o por el usuario `operador`:
+  ```bash
+  iptables -A OUTPUT -p tcp -d 172.19.0.3 --dport 80 -m owner --uid-owner www-data -j ACCEPT
+  iptables -A OUTPUT -p tcp -d 172.19.0.3 -j DROP
+  ```
+- **Autenticación Mutua y Cifrado (mTLS / Service Mesh):**  
+  No confiar en una petición por el simple hecho de provenir de una dirección IP de la red interna. La API de `phantomcorp-db` debe exigir **mTLS (Mutual TLS)** con certificados cliente emitidos para el servicio web, o tokens de autorización de corta duración (OAuth2/JWT). De este modo, aunque un atacante tome control de la máquina perimetral y ejecute `curl`, no podrá autenticarse ante la base de datos al no poseer el certificado criptográfico privado.
+- **Políticas de red restrictivas en orquestadores (*NetworkPolicies*):**  
+  En entornos de contenedores o Kubernetes, aplicar `NetworkPolicies` con aislamiento estricto que impidan que contenedores de la capa perimetral envíen paquetes hacia pods de bases de datos internas, salvo a través de puertos y servicios explícitamente declarados en la lista blanca de la arquitectura.
