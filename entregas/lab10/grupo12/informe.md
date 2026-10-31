@@ -138,13 +138,71 @@ El encabezado HTTP `User-Agent` es una cadena puramente declarativa y no autenti
 
 ### P4 — Detección automática de la intrusión en el log (R5)
 
-*(A completar por Mateo Gerbaudo — Commit 4)*
+**El problema observado en R5:**  
+En la consola del SOC (`http://phantomcorp/soc`), en medio de más de 120 eventos monótonos y benignos correspondientes a consultas internas de usuarios (`10.0.x.x - GET /catalogo?item=N 200 BENIGN`), se encontraba oculta en la línea 73 la siguiente entrada:
+```text
+185.220.101.42 - GET /admin/../../etc/passwd 200 ALERT[path-traversal] # intrusion no atribuida -> FLAG{intrusion_in_the_noise}
+```
+A pesar de que el motor del IDS evaluó la regla y etiquetó la petición con `ALERT[path-traversal]`, **la intrusión se consumó con éxito**: el servidor web entregó el contenido confidencial de `/etc/passwd` con código `HTTP 200 OK`. La alerta permaneció latente en el log sin que ningún operador se percatara hasta que se realizó una búsqueda manual explícita (`grep ALERT`).
+
+**Mecanismos técnicos para lograr la detección, alerta y contención automática en un SOC moderno:**
+
+1. **Transformación de IDS Pasivo a IPS en Modo Bloqueo (*Inline Prevention*):**
+   - El entorno operaba como un IDS puramente pasivo (modo *sniffer/monitor*), que se limita a inspeccionar el tráfico en una copia (*port mirroring/SPAN*) y emitir alertas a un archivo de registro sin interferir en la sesión.
+   - En una arquitectura robusta, el sensor debe operar en modo **IPS (*Intrusion Prevention System*)** o WAF en línea (*blocking mode*). Ante la coincidencia con la firma `path-traversal`, el motor corta inmediatamente la conexión emitiendo paquetes `TCP RST` en ambas direcciones o respondiendo con un `HTTP 403 Forbidden`, impidiendo que el backend llegue a procesar la ruta en disco ni devuelva el archivo sensible.
+
+2. **Reglas de Correlación Automática en SIEM por Severidad Crítica:**
+   - En una plataforma SIEM (como Splunk, Elastic Security, Wazuh o Microsoft Sentinel), se define una regla de correlación automatizada basada en la combinación de alerta y resultado:
+     $$\text{Regla: } (\text{event.type} == \text{"ALERT"} \land \text{http.response.status\_code} == 200)$$
+   - Un ataque reconocido que devuelve código `200 OK` denota una **explotación confirmada y exitosa**. Esta condición debe catalogarse automáticamente con severidad **P1 / Crítica**, disparando notificaciones inmediatas por webhook a canales de guardia (PagerDuty, Opsgenie, Slack SOC) y abriendo un ticket automático de incidente en Jira/ServiceNow sin depender de la revisión humana periódica.
+
+3. **Enriquecimiento con Inteligencia de Amenazas (*Threat Intelligence*) y Georreferenciación:**
+   - La IP origen `185.220.101.42` es una dirección pública externa (típica de rangos de nodos de salida Tor o proxies anónimos), en contraste con el 100% del tráfico legítimo que provenía del direccionamiento privado corporativo `10.0.0.0/8`.
+   - La correlación automática de logs debe cotejar las IPs entrantes contra listas de reputación dinámica (*Threat Feeds* como AbuseIPDB, AlienVault OTX o Spamhaus). Al detectar que una IP externa no autenticada intenta alcanzar rutas administrativas internas (`/admin/`), el sistema debe asignarle un *Risk Score* elevado y alertar de inmediato.
+
+4. **Detección basada en el Host (HIDS / EDR / Falco):**
+   - Más allá de la red, la intrusión debió ser detectada en el propio sistema operativo del host mediante auditoría del kernel (`auditd`, OSSEC/Wazuh o Falco).
+   - Una regla de integridad como `file_read: path=/etc/passwd` ejecutada por un proceso no privilegiado (`www-data`, `nobody` o el servidor web Python) constituye una anomalía crítica a nivel de host que genera una alerta independiente de la red y puede congelar el proceso atacado de forma instantánea.
+
+5. **Automatización y Respuesta con SOAR (*Security Orchestration, Automation, and Response*):**
+   - Implementación de un *playbook* automatizado que, ante la confirmación del evento crítico, ejecute acciones de contención sin intervención humana: inserción automática de una regla de descarte (*drop*) para la IP `185.220.101.42` en el firewall perimetral (`iptables`/Cloud Security Group) con un período de gracia de 24 horas y revocación de cualquier sesión activa asociada.
 
 ---
 
 ### P5 — Cierre del curso: por qué un buen atacante debe entender al defensor, y viceversa
 
-*(A completar por Mateo Gerbaudo — Commit 4)*
+Este laboratorio cierra el arco formativo completo de la asignatura: tras haber recorrido el reconocimiento perimetral (Lab 05), la enumeración exhaustiva (Lab 06), la explotación web y de inyecciones (Lab 07), la post-explotación con elevación de privilegios y pivoting (Lab 08), y la orquestación autónoma mediante agentes de inteligencia artificial (Lab 09), el Laboratorio 10 nos coloca del otro lado del monitor para observar la telemetría que cada una de esas acciones generó en el SOC.
+
+La premisa epistemológica fundamental de la ciberseguridad es que **la ofensiva (Red Team) y la defensiva (Blue Team) no son disciplinas independientes ni saberes aislados, sino dos aplicaciones simétricas del mismo conocimiento técnico profundo**:
+
+```text
+       CONOCIMIENTO FUNDAMENTAL (Protocolos, Kernels, Parsers, Arquitectura de Software)
+                                      ▲
+                                     ╱ ╲
+                                    ╱   ╲
+     PERSPECTIVA OFENSIVA (Red)    ╱     ╲    PERSPECTIVA DEFENSIVA (Blue)
+   - Explotar desajustes de parsers       - Normalizar e inspeccionar sintaxis
+   - Descubrir supuestos no validados     - Implementar validación estricta y Least Privilege
+   - Moverse silencioso (low-and-slow)    - Correlacionar telemetría y detectar anomalías
+   - Evadir firmas por polimorfismo       - Diseñar defensas en profundidad resilientes
+                                    ╲   ╱
+                                     ╲ ╱
+                                      ▼
+                        ENFOQUE UNIFICADO (Purple Team)
+```
+
+#### 1. Por qué un buen atacante (Red Team) debe entender al defensor:
+- **Evitar la torpeza operativa y la detección temprana:** Un atacante que no comprende cómo funciona un IDS, un WAF o un SIEM es ruidoso e ineficiente. Disparará herramientas con sus valores de fábrica (`sqlmap`, `nikto`, `nmap` con flags agresivos) que saturan las firmas estáticas más elementales (`scanner-ua`, picos volumétricos), provocando el bloqueo de su IP antes de siquiera entender la lógica del objetivo.
+- **Capacidad de evasión y operaciones encubiertas:** Para diseñar ataques avanzados, el pentester debe conocer con precisión qué artefactos deja en el sistema: qué líneas se escriben en `/var/log/auth.log`, cómo normaliza el WAF los comentarios SQL (`/**/`) o qué llamadas al sistema activan las reglas de un EDR en memoria. Solo quien sabe qué mira el analista del SOC puede modular su cadencia (*low-and-slow*), ofuscar sus cargas útiles y permanecer por debajo del radar de detección.
+- **Aportar valor profesional a la organización:** El propósito de un ejercicio de *Red Team* o prueba de penetración no es "ganar" ni demostrar superioridad técnica destruyendo infraestructura, sino **ayudar al defensor a robustecer sus controles**. Un auditor que no entiende cómo funciona una regla de ModSecurity, cómo se parametriza una consulta en código o cómo correlaciona un SIEM no puede redactar un informe con recomendaciones de remediación prácticas y aplicables.
+
+#### 2. Por qué un buen defensor (Blue Team) debe entender al atacante:
+- **Superar la ingenuidad de la "seguridad por oscuridad" y las listas negras:** Un defensor que nunca explotó una vulnerabilidad tiende a confiar ciegamente en firmas de fábrica y manuales estáticos. Como quedó demostrado con la regla `sqli-union`, creer que la base de datos está a salvo porque una expresión regular exige un espacio literal (`union\s+select`) es una ilusión que se derrumba ante un atacante con conocimientos mínimos de la gramática SQL.
+- **Anticipación y Threat Hunting Proactivo:** Quien comprende la mentalidad y las metodologías del adversario (como la cadena de ataque de MITRE ATT&CK) no espera pasivamente a que suene una alarma prefabricada. Sabe que tras una shell inicial vendrá la búsqueda de credenciales en `.env` (Lab 08), el abuso de binarios SUID indebidos, el pivoting hacia la red interna o la automatización mediante agentes (Lab 09). Esta comprensión le permite buscar proactivamente indicadores de compromiso (*IOCs*) y comportamientos sospechosos antes de que el adversario consolide su persistencia.
+- **Diseño de defensas en profundidad bajo el paradigma Zero Trust:** Conocer cómo los atacantes encadenan vectores débiles para lograr compromisos totales enseña que ninguna capa perimetral es infalible. El defensor que piensa como atacante no se conforma con instalar un WAF; aplica principio de mínimo privilegio en el sistema operativo, segmentación estricta de redes internas en Capa 3 y parametrización en la capa de datos.
+
+#### 3. Conclusión: La integración en el Purple Team
+El estadio más maduro de la seguridad informática contemporánea es la superación de la rivalidad artificial entre atacantes y defensores mediante el modelo de **Purple Teaming**. La seguridad efectiva no se alcanza jugando al gato y al ratón, sino cuando el conocimiento ofensivo alimenta de forma continua la ingeniería de detección y el endurecimiento de la infraestructura, y cuando las restricciones defensivas desafían a los auditores a elevar su rigor técnico. Red y Blue son, en definitiva, dos mitades indisolubles de una misma disciplina profesional.
 
 ---
 
