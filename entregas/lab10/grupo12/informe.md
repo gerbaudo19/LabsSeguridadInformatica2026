@@ -15,9 +15,9 @@
 En cumplimiento con el régimen de la cátedra y las pautas de `CONTRIBUTING.md`:
 
 - **Herramienta utilizada:** Asistente IA (Antigravity / Gemini 3.8 Flash).
-- **Alcance de la asistencia:** Asistencia en la inicialización de la entrega, estructuración de las plantillas del informe técnico pericial, registro de la captura de banderas del CTF (R1–R5) y redacción técnica de la bitácora de comandos con eventos generados (@matiasmariatticasc).
-- **Partes originadas o modificadas:** Inicialización de `INTEGRANTES.md`, Sección 0 (Declaración de uso de IA), Sección 1 (Flags capturadas de R1 a R5) y Sección 4 (Bitácora de comandos) por @matiasmariatticasc; Sección 2 (Tabla comparativa de firmas, técnicas de evasión y mejoras defensivas del Blue Team) por @ColqueAlvaro; Sección 3 (Preguntas de análisis P1-P5) y `research.md` a completar por @Gonza149 y @gerbaudo19.
-- **Verificación humana:** Se validó la coherencia de los retos R1 a R5 contra `retos.manifest` y el servidor `phantomcorp-soc`. Matías Mariatti verificó los comandos curl ejecutados, comprobando los códigos de respuesta HTTP (403 Forbidden para alertas del IDS y 200 OK para evasiones), contrastando las firmas activas del ruleset y validando la detección en los logs del SOC.
+- **Alcance de la asistencia:** Asistencia en la inicialización de la entrega, estructuración de las plantillas del informe técnico pericial, registro de la captura de banderas del CTF (R1–R5) y redacción técnica de la bitácora de comandos con eventos generados (@matiasmariatticasc); elaboración de la tabla comparativa de firmas, técnicas de evasión y mejoras defensivas del Blue Team (@ColqueAlvaro); asistencia en la redacción y fundamentación técnica de las preguntas de análisis P1, P2 y P3 (@Gonza149).
+- **Partes originadas o modificadas:** Inicialización de `INTEGRANTES.md`, Sección 0 (Declaración de uso de IA), Sección 1 (Flags capturadas de R1 a R5) y Sección 4 (Bitácora de comandos) por @matiasmariatticasc; Sección 2 (Tabla comparativa de firmas, técnicas de evasión y mejoras defensivas del Blue Team) por @ColqueAlvaro; Sección 3: preguntas de análisis P1, P2 y P3 por @Gonza149; preguntas P4 y P5 y `research.md` a completar por @gerbaudo19.
+- **Verificación humana:** Se validó la coherencia de los retos R1 a R5 contra `retos.manifest` y el servidor `phantomcorp-soc`. Se verificaron los comandos `curl` ejecutados, comprobando los códigos de respuesta HTTP (`403 Forbidden` para alertas del IDS y `200 OK` para evasiones), contrastando las firmas activas del ruleset (`server.py`), probando la reescritura de la expresión regular de P2 frente a payloads ofuscados con `/**/` y validando la detección en los logs del SOC.
 
 ---
 
@@ -68,7 +68,83 @@ A continuación se analizan en profundidad las cuatro firmas del ruleset del IDS
 
 ## 3. Preguntas de análisis (P1–P5)
 
-*(A completar por Gonzalo Rodríguez y Mateo Gerbaudo en Commits 3 y 4)*
+### P1 — ¿Por qué la detección por firmas es evadible por diseño y qué la complementa?
+
+**Por qué es evadible por diseño:**  
+La detección basada en firmas opera bajo un modelo de **lista negra sintáctica (*blacklisting*)**: busca coincidencias exactas contra un catálogo finito de cadenas o expresiones regulares que describen cómo se vio un ataque en el pasado. Su fragilidad estructural radica en dos principios fundamentales:
+1. **Diferencial de interpretación (*Parser Differential / Impedance Mismatch*):** Mientras que el IDS evalúa una expresión regular superficial sobre el texto crudo de la petición HTTP, el componente de destino (un motor SQL, un intérprete bash o el subsistema de archivos del kernel) interpreta una gramática formal completa. Esa gramática admite múltiples representaciones sintácticas semánticamente equivalentes (*polimorfismo*: comentarios inline `/**/`, codificaciones URL/hexadecimal/Unicode, paréntesis `UNION(SELECT...)`, concatenación de strings). Al atacante le basta encontrar **una sola variante** que sea válida para el parser del backend pero que no calce con el patrón literal del IDS para lograr un **falso negativo** (evasión).
+2. **Ceguera ante ataques desconocidos y de lógica de negocio:** Una firma solo reconoce lo que ya fue codificado en su ruleset; es incapaz de detectar vulnerabilidades *zero-day*, uso legítimo de credenciales robadas o abusos de lógica de negocio (como un IDOR `/perfil?id=1`, cuya sintaxis HTTP es idéntica a una petición benigna `/perfil?id=3`).
+
+**Qué la complementa en una arquitectura de defensa en profundidad:**
+- **Detección basada en comportamiento y anomalías (UEBA / Análisis heurístico y estadístico):** En lugar de buscar un string específico, establece una línea base del tráfico normal y alerta ante desviaciones de comportamiento: picos en la tasa de peticiones por minuto (*rate limiting*), ráfagas de respuestas `404`/`401`/`500` desde una misma IP, tiempos de respuesta inusualmente largos o secuencias anómalas de acceso a endpoints.
+- **Análisis léxico y semántico con normalización previa:** Motores como **libinjection** (integrado en OWASP ModSecurity CRS) que primero decodifican y normalizan el input y luego lo tokenizan en un árbol sintáctico SQL/XSS en lugar de depender de regex simples.
+- **Correlación de logs (SIEM) y Threat Hunting humano en el SOC:** Analistas que correlacionan telemetría de distintas capas (WAF, servidor web, base de datos, EDR en el host) para descubrir intrusiones silenciosas que pasaron como `200 OK` frente al filtro perimetral.
+- **Controles preventivos en la capa de aplicación:** Consultas parametrizadas, validación de rutas canónicas y control de acceso en el servidor, garantizando que aunque un payload evada el IDS, no pueda explotar la aplicación.
+
+---
+
+### P2 — Reescritura de la firma `sqli-union` contra `/**/` y análisis de la firma "perfecta"
+
+**Por qué se evadió la regla original:**  
+En `server.py`, la firma original está definida como:
+```python
+("sqli-union", lambda path, q, ua: bool(re.search(r"union\s+select", q, re.I)))
+```
+El cuantificador `\s+` exige obligatoriamente al menos un carácter de espacio en blanco (` `, `\t`, `\n`) entre `union` y `select`. Cuando enviamos `q=union/**/select`, el comentario de bloque C-style `/**/` separa ambos tokens para el motor SQL sin emplear ningún carácter de espacio, haciendo que `\s+` evalúe a `False`.
+
+**Reescritura mejorada de la regla:**  
+Para impedir la evasión mediante `/**/==================`, URL-encoding (`%2f%2a%2a%2f`), paréntesis (`UNION(SELECT...)`) o modificadores como `UNION ALL SELECT`, la regla debe combinar **decodificación + normalización de comentarios** antes de evaluar la expresión regular:
+
+```python
+import re
+from urllib.parse import unquote_plus
+
+def firma_sqli_union_mejorada(path: str, q: str, ua: str) -> bool:
+    # 1. Decodificar URL-encoding de forma iterativa (mitiga %2f* y doble encoding %252f*)
+    normalizado = unquote_plus(unquote_plus(q))
+    # 2. Reemplazar cualquier comentario SQL /* ... */ por un espacio en blanco
+    normalizado = re.sub(r"/\*.*?\*/", " ", normalizado, flags=re.S)
+    # 3. Evaluar regex que contempla espacios, ALL/DISTINCT o delimitadores como paréntesis
+    patron = r"\bunion\b(?:\s+|\b(?:all|distinct)\b|[()+~!-])+\bselect\b"
+    return bool(re.search(patron, normalizado, re.I))
+```
+Con esta regla, tanto `union select`, `union/**/select`, `UNION/*comentario*/ALL/*x*/SELECT` como `UNION(SELECT 1,2)` son detectados y bloqueados con `403`.
+
+**¿Se puede hacer una firma "perfecta"?**  
+**No, es teórica y prácticamente imposible construir una firma perfecta.** Las razones son:
+1. **Límite formal de las expresiones regulares:** Las firmas regex pertenecen a los lenguajes regulares (Tipo 3 en la jerarquía de Chomsky), mientras que SQL es un lenguaje libre de contexto (Tipo 2) con extensiones específicas de cada motor (ej. comentarios condicionales ejecutables en MySQL `/*!50000UNION*/`, funciones de construcción dinámica de cadenas `CHAR()`, o inyecciones *Blind* booleanas `AND 1=1` / basadas en tiempo que ni siquiera contienen las palabras `UNION` ni `SELECT`).
+2. **El dilema fundamental entre Falsos Negativos y Falsos Positivos:** Si endurecemos la firma para bloquear cualquier aparición suelta de las palabras `union` o `select`, una búsqueda legítima de un cliente o empleado en el portal (por ejemplo, buscar el producto *"unión selectora industrial"* o *"Reunión de selección de personal"*) será bloqueada erróneamente (**Falso Positivo**), degradando la disponibilidad del negocio. Si relajamos la firma para no bloquear usuarios reales, siempre existirá algún dialecto u ofuscación que pase (**Falso Negativo**). Por ello, las firmas en un WAF son una barrera de contención (*virtual patching*), pero la solución definitiva reside únicamente en parametrizar las consultas en el backend.
+
+---
+
+### P3 — Detectar por `User-Agent`: por qué es débil y qué mirar en lugar de "quién dice ser"
+
+**Por qué detectar por `User-Agent` es una detección débil:**  
+El encabezado HTTP `User-Agent` es una cadena puramente declarativa y no autenticada que el cliente define a voluntad en cada petición. Confiar en la firma `scanner-ua` (`sqlmap|nikto|nmap|dirb`) equivale a preguntarle a un intruso en la puerta si viene a robar:
+- En la **Pirámide del Dolor (*Pyramid of Pain*)** de David Bianco, el `User-Agent` se ubica en los escalones más bajos (costo de modificación nulo para el atacante).
+- Basta agregar un flag estándar (`curl -A "Mozilla/5.0..."`, `sqlmap --random-agent`, `dirb ... -a "..."`) para que la herramienta ofensiva se mimetice instantáneamente con un navegador Chrome o Firefox legítimo. La firma solo detiene escaneos automáticos descuidados (ruido de bots masivos), pero es completamente inútil frente a un atacante humano o un agente mínimamente configurado.
+
+**Qué indicadores mirar en lugar de "quién dice ser" (analizar *qué hace* y *cómo habla su pila de red*):**
+1. **Patrones comportamentales y volumétricos del tráfico (*Behavioral Detection*):**
+   - **Velocidad y cadencia (*Request Rate*):** Un usuario humano no solicita 80 rutas distintas por segundo con intervalos exactos de 10 milisegundos.
+   - **Tasa de errores HTTP por IP:** Un escáner de directorios (`dirb`/`ffuf`) o un fuzzer de SQLi genera una proporción anormalmente alta de respuestas `404 Not Found`, `400 Bad Request`, `403 Forbidden` o `500 Internal Server Error` en pocos segundos.
+   - **Patrón de navegación antinatural:** Un navegador real que carga `/` descarga inmediatamente los recursos estáticos asociados (`.css`, `.js`, `.png`, `favicon.ico`); una herramienta de línea de comandos (`curl`, `sqlmap`, `nikto`) golpea directamente endpoints de API o rutas de diccionario sin cargar jamás un asset visual ni ejecutar JavaScript.
+2. **Inspección de la carga útil (*Payload Inspection & Entropy*):**
+   - Analizar los parámetros de consulta (`query string`), cuerpo `POST` y cookies en busca de alta densidad de caracteres no alfanuméricos o metacaracteres de control (`'`, `"`, `--`, `/**/`, `;`, `|`, `../`, `%00`), independientemente de qué `User-Agent` declare la petición.
+3. **Fingerprinting criptográfico y de protocolo (JA3 / JA4 y HTTP/2 Fingerprinting):**
+   - Aunque `sqlmap` o un script en Python envíen el header `User-Agent: Mozilla/5.0 (Chrome/120)`, durante el handshake TLS (`ClientHello`) y el armado de tramas HTTP/2 la librería subyacente (`urllib`, `python-requests`, `libcurl`, `Go net/http`) negocia una lista específica de *cipher suites*, extensiones TLS y orden de cabeceras HTTP que no coincide con la huella criptográfica real de un motor Chromium. Contrastar el `User-Agent` declarado contra el hash **JA3/JA4** permite detectar de inmediato que el cliente está falsificando su identidad.
+
+---
+
+### P4 — Detección automática de la intrusión en el log (R5)
+
+*(A completar por Mateo Gerbaudo — Commit 4)*
+
+---
+
+### P5 — Cierre del curso: por qué un buen atacante debe entender al defensor, y viceversa
+
+*(A completar por Mateo Gerbaudo — Commit 4)*
 
 ---
 
